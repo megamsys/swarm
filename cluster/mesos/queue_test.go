@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type MockHandler struct{}
+type MockTaskScheduler struct{}
 
-func (h MockHandler) Process(ts []*task) []*task {
+func (h MockTaskScheduler) ScheduleTasks(ts []*task) []*task {
 	return ts
 }
 
@@ -47,15 +47,15 @@ func TestRemove(t *testing.T) {
 
 func TestProcess(t *testing.T) {
 	q := newMockQueue()
-	h := MockHandler{}
+	s := MockTaskScheduler{}
 
 	q.Add(mockTask("1"))
 	assert.Equal(t, len(q.tasks), 1)
-	q.Process(h)
+	q.Process(s)
 	assert.Equal(t, len(q.tasks), 0)
 
 	q.Add(mockTask("2"))
 	assert.Equal(t, len(q.tasks), 1)
-	q.Process(h)
+	q.Process(s)
 	assert.Equal(t, len(q.tasks), 0)
 }

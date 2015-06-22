@@ -64,10 +64,10 @@ func TestRemoveOffer(t *testing.T) {
 	s.addOffer(mesosutil.NewOffer(mesosutil.NewOfferID("ID2"), nil, nil, "hostname1"))
 	assert.Equal(t, len(s.offers), 2)
 
-	assert.True(t, s.removeOffer("ID1", false))
+	assert.True(t, s.removeOffer("ID1"))
 	assert.Equal(t, len(s.offers), 1)
 
-	assert.False(t, s.removeOffer("ID1", false))
+	assert.False(t, s.removeOffer("ID1"))
 }
 
 func TestRemoveTask(t *testing.T) {

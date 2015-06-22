@@ -12,9 +12,9 @@ type Queue struct {
 	tasks map[string]*task
 }
 
-// Handler handles multiple tasks and returns the successfully handled tasks
-type Handler interface {
-	Process(tasks []*task) []*task
+// TaskScheduler schedules multiple tasks and returns the successfully scheduled tasks
+type TaskScheduler interface {
+	ScheduleTasks(tasks []*task) []*task
 }
 
 // NewQueue returns a new queue
@@ -37,13 +37,13 @@ func (q *Queue) Remove(tasks ...*task) {
 }
 
 // Process tries to Do all the tasks in the queue and remove the tasks successfully done
-func (q *Queue) Process(h Handler) {
+func (q *Queue) Process(s TaskScheduler) {
 	q.Lock()
 	ts := []*task{}
 	for _, t := range q.tasks {
 		ts = append(ts, t)
 	}
-	toRemove := h.Process(ts)
+	toRemove := s.ScheduleTasks(ts)
 	q.remove(toRemove...)
 	q.Unlock()
 }

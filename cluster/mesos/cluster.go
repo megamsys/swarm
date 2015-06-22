@@ -26,17 +26,18 @@ import (
 type Cluster struct {
 	sync.RWMutex
 
-	driver           *mesosscheduler.MesosSchedulerDriver
-	dockerEnginePort string
-	eventHandler     cluster.EventHandler
-	master           string
-	slaves           map[string]*slave
-	scheduler        *scheduler.Scheduler
-	store            *state.Store
-	TLSConfig        *tls.Config
-	options          *cluster.DriverOpts
-	offerTimeout     time.Duration
-	pendingTasks     *Queue
+	driver              *mesosscheduler.MesosSchedulerDriver
+	dockerEnginePort    string
+	eventHandler        cluster.EventHandler
+	master              string
+	slaves              map[string]*slave
+	scheduler           *scheduler.Scheduler
+	store               *state.Store
+	TLSConfig           *tls.Config
+	options             *cluster.DriverOpts
+	offerTimeout        time.Duration
+	pendingTasks        *Queue
+	taskCreationTimeout time.Duration
 }
 
 const (
@@ -44,7 +45,7 @@ const (
 	defaultDockerEnginePort    = "2375"
 	defaultDockerEngineTLSPort = "2376"
 	defaultOfferTimeout        = 10 * time.Minute
-	taskCreationTimeout        = 5 * time.Second
+	defaultTaskCreationTimeout = 5 * time.Second
 )
 
 var (
@@ -56,14 +57,15 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, TLSConfig *t
 	log.WithFields(log.Fields{"name": "mesos"}).Debug("Initializing cluster")
 
 	cluster := &Cluster{
-		dockerEnginePort: defaultDockerEnginePort,
-		master:           master,
-		slaves:           make(map[string]*slave),
-		scheduler:        scheduler,
-		store:            store,
-		TLSConfig:        TLSConfig,
-		options:          &options,
-		offerTimeout:     defaultOfferTimeout,
+		dockerEnginePort:    defaultDockerEnginePort,
+		master:              master,
+		slaves:              make(map[string]*slave),
+		scheduler:           scheduler,
+		store:               store,
+		TLSConfig:           TLSConfig,
+		options:             &options,
+		offerTimeout:        defaultOfferTimeout,
+		taskCreationTimeout: defaultTaskCreationTimeout,
 	}
 
 	cluster.pendingTasks = NewQueue(cluster)
@@ -101,6 +103,14 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, TLSConfig *t
 		cluster.offerTimeout = d
 	}
 
+	if taskCreationTimeout, ok := options.String("mesos.tasktimeout", "SWARM_MESOS_TASK_TIMEOUT"); ok {
+		d, err := time.ParseDuration(taskCreationTimeout)
+		if err != nil {
+			return nil, err
+		}
+		cluster.taskCreationTimeout = d
+	}
+
 	driver, err := mesosscheduler.NewMesosSchedulerDriver(driverConfig)
 	if err != nil {
 		return nil, err
@@ -135,7 +145,7 @@ func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) 
 	}
 
 	go func(t *task) {
-		if len(c.Process([]*task{t})) == 0 {
+		if len(c.ScheduleTasks([]*task{t})) == 0 {
 			c.pendingTasks.Add(t)
 		}
 	}(t)
@@ -145,7 +155,7 @@ func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) 
 		return formatContainer(container), nil
 	case err := <-t.error:
 		return nil, err
-	case <-time.After(taskCreationTimeout):
+	case <-time.After(c.taskCreationTimeout):
 		c.pendingTasks.Remove(t)
 		return nil, strategy.ErrNoResourcesAvailable
 	}
@@ -388,13 +398,9 @@ func (c *Cluster) placeTask(task *task, nodes []*node.Node) *slave {
 	return s
 }
 
-func (c *Cluster) Process(tasks []*task) []*task {
-	return c.scheduleTasks(tasks)
-}
-
-// scheduleTasks schedules and launches the tasks to mesos driver, and return the tasks
+// ScheduleTasks schedules and launches the tasks to mesos driver, and return the tasks
 // that was successfully placed.
-func (c *Cluster) scheduleTasks(tasks []*task) []*task {
+func (c *Cluster) ScheduleTasks(tasks []*task) []*task {
 	// Keep a map of slaves to tasks scheduled
 	usedSlaves := make(map[*slave][]*task)
 	scheduled := []*task{}
