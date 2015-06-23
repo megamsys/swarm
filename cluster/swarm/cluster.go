@@ -89,8 +89,9 @@ func (c *Cluster) generateUniqueID() string {
 
 // CreateContainer aka schedule a brand new container into the cluster.
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
-	c.scheduler.Lock()
-	defer c.scheduler.Unlock()
+	//megam modify this
+        //c.scheduler.Lock()
+	//defer c.scheduler.Unlock()
 
 	// Ensure the name is avaliable
 	if cID := c.getIDFromName(name); cID != "" {
