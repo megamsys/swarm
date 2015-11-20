@@ -24,6 +24,7 @@ type task struct {
 	config    *cluster.ContainerConfig
 	error     chan error
 	container chan *cluster.Container
+	done      bool
 }
 
 func (t *task) ID() string {
@@ -34,7 +35,11 @@ func (t *task) Do() bool {
 	return t.cluster.scheduleTask(t)
 }
 
-func (t *task) build(slaveID string) {
+func (t *task) Stop() {
+	t.done = true
+}
+
+func (t *task) build(slaveID string, offers map[string]*mesosproto.Offer) {
 	t.Command = &mesosproto.CommandInfo{Shell: proto.Bool(false)}
 
 	t.Container = &mesosproto.ContainerInfo{
@@ -44,27 +49,52 @@ func (t *task) build(slaveID string) {
 		},
 	}
 
+	if t.config.Hostname != "" {
+		t.Container.Hostname = proto.String(t.config.Hostname)
+		if t.config.Domainname != "" {
+			t.Container.Hostname = proto.String(t.config.Hostname + "." + t.config.Domainname)
+		}
+	}
+
 	switch t.config.HostConfig.NetworkMode {
 	case "none":
 		t.Container.Docker.Network = mesosproto.ContainerInfo_DockerInfo_NONE.Enum()
 	case "host":
 		t.Container.Docker.Network = mesosproto.ContainerInfo_DockerInfo_HOST.Enum()
-	case "bridge", "":
-		for containerPort, bindings := range t.config.HostConfig.PortBindings {
+	case "default", "bridge", "":
+		var ports []uint64
+
+		for _, offer := range offers {
+			ports = append(ports, getPorts(offer)...)
+		}
+
+		for containerProtoPort, bindings := range t.config.HostConfig.PortBindings {
 			for _, binding := range bindings {
-				fmt.Println(containerPort)
-				containerInfo := strings.SplitN(containerPort, "/", 2)
-				fmt.Println(containerInfo[0], containerInfo[1])
+				containerInfo := strings.SplitN(containerProtoPort, "/", 2)
 				containerPort, err := strconv.ParseUint(containerInfo[0], 10, 32)
 				if err != nil {
 					log.Warn(err)
 					continue
 				}
-				hostPort, err := strconv.ParseUint(binding.HostPort, 10, 32)
-				if err != nil {
-					log.Warn(err)
+
+				var hostPort uint64
+
+				if binding.HostPort != "" {
+					hostPort, err = strconv.ParseUint(binding.HostPort, 10, 32)
+					if err != nil {
+						log.Warn(err)
+						continue
+					}
+				} else if len(ports) > 0 {
+					hostPort = ports[0]
+					ports = ports[1:]
+				}
+
+				if hostPort == 0 {
+					log.Warn("cannot find port to bind on the host")
 					continue
 				}
+
 				protocol := "tcp"
 				if len(containerInfo) == 2 {
 					protocol = containerInfo[1]
@@ -104,6 +134,10 @@ func (t *task) build(slaveID string) {
 		t.Container.Docker.Parameters = append(t.Container.Docker.Parameters, &mesosproto.Parameter{Key: proto.String("label"), Value: proto.String(fmt.Sprintf("%s=%s", key, value))})
 	}
 
+	for _, value := range t.config.Env {
+		t.Container.Docker.Parameters = append(t.Container.Docker.Parameters, &mesosproto.Parameter{Key: proto.String("env"), Value: proto.String(value)})
+	}
+
 	t.SlaveId = &mesosproto.SlaveID{Value: &slaveID}
 }
 
@@ -128,7 +162,7 @@ func newTask(c *Cluster, config *cluster.ContainerConfig, name string) (*task, e
 
 	task.Name = &name
 	task.TaskId = &mesosproto.TaskID{Value: &id}
-
+	task.Labels = &mesosproto.Labels{Labels: []*mesosproto.Label{{Key: proto.String("SWARM_CONTAINER_NAME"), Value: &name}}}
 	return task, nil
 }
 

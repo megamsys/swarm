@@ -23,7 +23,7 @@ You install Docker Swarm on a single system which is known as your Docker Swarm 
 * have Docker Engine 1.6.0+ installed
 * open a TCP port to listen for the manager
 
-You can run Docker Swarm on Linux 64-bit architectures. You can also install and run it on 64-bit Windows and Max OSX but these architectures are *not* regularly tested for compatibility in the BETA phase.
+You can run Docker Swarm on Linux 64-bit architectures. You can also install and run it on 64-bit Windows and Max OSX but these architectures are *not* regularly tested for compatibility.
 
 Take a moment and identify the systems on your network that you intend to use. Ensure each node meets the requirements listed above.
 
@@ -53,10 +53,14 @@ Docker daemon, monitors it, and updates the discovery backend with the node's st
 
 This example uses the Docker Hub based `token` discovery service. Log into **each node** and do the following.
 
-1. Start the Docker daemon with the `-H` flag. This ensures that the Docker remote API on *Swarm Agents* is available over TCP for the *Swarm Manager*.
+1. Start the Docker daemon with the `-H` flag. This ensures that the
+Docker remote API on *Swarm Agents* is available over TCP for the
+*Swarm Manager*, as well as the standard unix socket which is
+available in default docker installs.
 
-		$ docker -H tcp://0.0.0.0:2375 -d
- 
+		$ docker daemon -H tcp://0.0.0.0:2375 -H unix:///var/run/docker.sock
+
+	> **Note**: versions of docker prior to 1.8 used the `-d` flag instead of the `docker daemon` subcommand.
 
 2. Register the Swarm agents to the discovery service. The node's IP must be accessible from the Swarm Manager. Use the following command and replace with the proper `node_ip` and `cluster_id` to start an agent:
 
@@ -66,13 +70,19 @@ This example uses the Docker Hub based `token` discovery service. Log into **eac
 
 		$ docker run -d swarm join --addr=172.31.40.100:2375 token://6856663cdefdec325839a4b7e1de38e8
 
-3. Start the Swarm manager on any machine or your laptop. 
+## Configure a manager
+
+Once you have your nodes established, set up a manager to control the swarm.
+
+1. Start the Swarm manager on any machine or your laptop. 
 
 	The following command illustrates how to do this:
 
-		docker run -d -p <swarm_port>:2375 swarm manage token://<cluster_id>
+		docker run -d -p <manager_port>:2375 swarm manage token://<cluster_id>
 
-4. Once the manager is running, check your configuration by running `docker info` as follows:
+	The manager is exposed and listening on `<manager_port>`.
+
+2. Once the manager is running, check your configuration by running `docker info` as follows:
 
 		docker -H tcp://<manager_ip:manager_port> info
 

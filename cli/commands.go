@@ -14,7 +14,7 @@ var (
 			Name:      "list",
 			ShortName: "l",
 			Usage:     "List nodes in a cluster",
-			Flags:     []cli.Flag{flTimeout},
+			Flags:     []cli.Flag{flTimeout, flDiscoveryOpt},
 			Action:    list,
 		},
 		{
@@ -22,21 +22,20 @@ var (
 			ShortName: "m",
 			Usage:     "Manage a docker cluster",
 			Flags: []cli.Flag{
-				flStore,
 				flStrategy, flFilter,
 				flHosts,
-				flLeaderElection, flManageAdvertise,
+				flLeaderElection, flLeaderTTL, flManageAdvertise,
 				flTLS, flTLSCaCert, flTLSCert, flTLSKey, flTLSVerify,
 				flHeartBeat,
 				flEnableCors,
-				flCluster, flClusterOpt},
+				flCluster, flDiscoveryOpt, flClusterOpt},
 			Action: manage,
 		},
 		{
 			Name:      "join",
 			ShortName: "j",
 			Usage:     "join a docker cluster",
-			Flags:     []cli.Flag{flJoinAdvertise, flHeartBeat, flTTL},
+			Flags:     []cli.Flag{flJoinAdvertise, flHeartBeat, flTTL, flDiscoveryOpt},
 			Action:    join,
 		},
 	}

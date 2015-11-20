@@ -7,8 +7,11 @@ Swarm is a part of the [Docker](https://www.docker.com) project, and follows
 the same rules and principles. If you're already familiar with the way
 Docker does things, you'll feel right at home.
 
-Otherwise, go read
-[Docker's contributions guidelines](https://github.com/docker/docker/blob/master/CONTRIBUTING.md).
+Otherwise, go read Docker's
+[contributions guidelines](https://github.com/docker/docker/blob/master/CONTRIBUTING.md),
+[issue triaging](https://github.com/docker/docker/blob/master/project/ISSUE-TRIAGE.md),
+[review process](https://github.com/docker/docker/blob/master/project/REVIEWING.md) and
+[branches and tags](https://github.com/docker/docker/blob/master/project/BRANCHES-AND-TAGS.md).
 
 ### Development Environment Setup
 
@@ -40,7 +43,7 @@ First, prepare dependencies for `swarm` and try to compile it.
 ```sh
 cd src/github.com/docker/swarm
 $GOBIN/godep restore
-go test
+go test -v -race ./...
 go install
 ```
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/samalba/dockerclient"
 	"github.com/samalba/dockerclient/mockclient"
+	"github.com/samalba/dockerclient/nopclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -38,8 +39,12 @@ func TestEngineConnectionFailure(t *testing.T) {
 	client := mockclient.NewMockClient()
 	client.On("Info").Return(&dockerclient.Info{}, errors.New("fail"))
 
-	// Connect() should fail and isConnected() return false.
+	// Connect() should fail
 	assert.Error(t, engine.ConnectWithClient(client))
+
+	// isConnected() should return false
+	nop := nopclient.NewNopClient()
+	assert.Error(t, engine.ConnectWithClient(nop))
 	assert.False(t, engine.isConnected())
 
 	client.Mock.AssertExpectations(t)
@@ -51,6 +56,9 @@ func TestOutdatedEngine(t *testing.T) {
 	client.On("Info").Return(&dockerclient.Info{}, nil)
 
 	assert.Error(t, engine.ConnectWithClient(client))
+
+	nop := nopclient.NewNopClient()
+	assert.Error(t, engine.ConnectWithClient(nop))
 	assert.False(t, engine.isConnected())
 
 	client.Mock.AssertExpectations(t)
@@ -64,7 +72,9 @@ func TestEngineCpusMemory(t *testing.T) {
 	client.On("Info").Return(mockInfo, nil)
 	client.On("Version").Return(mockVersion, nil)
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil)
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil)
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
 
 	assert.NoError(t, engine.ConnectWithClient(client))
@@ -85,7 +95,9 @@ func TestEngineSpecs(t *testing.T) {
 	client.On("Info").Return(mockInfo, nil)
 	client.On("Version").Return(mockVersion, nil)
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil)
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil)
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
 
 	assert.NoError(t, engine.ConnectWithClient(client))
@@ -114,7 +126,9 @@ func TestEngineState(t *testing.T) {
 
 	// The client will return one container at first, then a second one will appear.
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{{Id: "one"}}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	client.On("InspectContainer", "one").Return(&dockerclient.ContainerInfo{Config: &dockerclient.ContainerConfig{CpuShares: 100}}, nil).Once()
 	client.On("ListContainers", true, false, fmt.Sprintf("{%q:[%q]}", "id", "two")).Return([]dockerclient.Container{{Id: "two"}}, nil).Once()
 	client.On("InspectContainer", "two").Return(&dockerclient.ContainerInfo{Config: &dockerclient.ContainerConfig{CpuShares: 100}}, nil).Once()
@@ -159,7 +173,9 @@ func TestCreateContainer(t *testing.T) {
 	client.On("Version").Return(mockVersion, nil)
 	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	assert.NoError(t, engine.ConnectWithClient(client))
 	assert.True(t, engine.isConnected())
 
@@ -172,7 +188,9 @@ func TestCreateContainer(t *testing.T) {
 	id := "id1"
 	client.On("CreateContainer", &mockConfig, name).Return(id, nil).Once()
 	client.On("ListContainers", true, false, fmt.Sprintf(`{"id":[%q]}`, id)).Return([]dockerclient.Container{{Id: id}}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	client.On("InspectContainer", id).Return(&dockerclient.ContainerInfo{Config: &config.ContainerConfig}, nil).Once()
 	container, err := engine.Create(config, name, false)
 	assert.Nil(t, err)
@@ -182,9 +200,9 @@ func TestCreateContainer(t *testing.T) {
 	// Image not found, pullImage == false
 	name = "test2"
 	mockConfig.CpuShares = int64(math.Ceil(float64(config.CpuShares*1024) / float64(mockInfo.NCPU)))
-	client.On("CreateContainer", &mockConfig, name).Return("", dockerclient.ErrNotFound).Once()
+	client.On("CreateContainer", &mockConfig, name).Return("", dockerclient.ErrImageNotFound).Once()
 	container, err = engine.Create(config, name, false)
-	assert.Equal(t, err, dockerclient.ErrNotFound)
+	assert.Equal(t, err, dockerclient.ErrImageNotFound)
 	assert.Nil(t, container)
 
 	// Image not found, pullImage == true, and the image can be pulled successfully
@@ -192,10 +210,12 @@ func TestCreateContainer(t *testing.T) {
 	id = "id3"
 	mockConfig.CpuShares = int64(math.Ceil(float64(config.CpuShares*1024) / float64(mockInfo.NCPU)))
 	client.On("PullImage", config.Image+":latest", mock.Anything).Return(nil).Once()
-	client.On("CreateContainer", &mockConfig, name).Return("", dockerclient.ErrNotFound).Once()
+	client.On("CreateContainer", &mockConfig, name).Return("", dockerclient.ErrImageNotFound).Once()
 	client.On("CreateContainer", &mockConfig, name).Return(id, nil).Once()
 	client.On("ListContainers", true, false, fmt.Sprintf(`{"id":[%q]}`, id)).Return([]dockerclient.Container{{Id: id}}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil).Once()
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 	client.On("InspectContainer", id).Return(&dockerclient.ContainerInfo{Config: &config.ContainerConfig}, nil).Once()
 	container, err = engine.Create(config, name, true)
 	assert.Nil(t, err)
@@ -203,6 +223,17 @@ func TestCreateContainer(t *testing.T) {
 	assert.Len(t, engine.Containers(), 2)
 }
 
+func TestImages(t *testing.T) {
+	engine := NewEngine("test", 0)
+	engine.images = []*Image{
+		{dockerclient.Image{Id: "a"}, engine},
+		{dockerclient.Image{Id: "b"}, engine},
+		{dockerclient.Image{Id: "c"}, engine},
+	}
+
+	result := engine.Images()
+	assert.Equal(t, len(result), 3)
+}
 func TestTotalMemory(t *testing.T) {
 	engine := NewEngine("test", 0.05)
 	engine.Memory = 1024
@@ -241,8 +272,10 @@ func TestUsedCpus(t *testing.T) {
 				client.On("Info").Return(mockInfo, nil)
 				client.On("Version").Return(mockVersion, nil)
 				client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
-				client.On("ListImages").Return([]*dockerclient.Image{}, nil).Once()
+				client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil).Once()
 				client.On("ListContainers", true, false, "").Return([]dockerclient.Container{{Id: "test"}}, nil).Once()
+				client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+				client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 				client.On("InspectContainer", "test").Return(&dockerclient.ContainerInfo{Config: &dockerclient.ContainerConfig{CpuShares: cpuShares}}, nil).Once()
 				engine.ConnectWithClient(client)
 
@@ -250,4 +283,39 @@ func TestUsedCpus(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestContainerRemovedDuringRefresh(t *testing.T) {
+	var (
+		container1 = dockerclient.Container{Id: "c1"}
+		container2 = dockerclient.Container{Id: "c2"}
+		info1      *dockerclient.ContainerInfo
+		info2      = &dockerclient.ContainerInfo{Id: "c2", Config: &dockerclient.ContainerConfig{}}
+	)
+
+	engine := NewEngine("test", 0)
+	assert.False(t, engine.isConnected())
+
+	// A container is removed before it can be inspected.
+	client := mockclient.NewMockClient()
+
+	client.On("Info").Return(mockInfo, nil)
+	client.On("Version").Return(mockVersion, nil)
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil)
+	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
+	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{container1, container2}, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
+	client.On("InspectContainer", "c1").Return(info1, errors.New("Not found"))
+	client.On("InspectContainer", "c2").Return(info2, nil)
+
+	assert.NoError(t, engine.ConnectWithClient(client))
+	assert.Nil(t, engine.RefreshContainers(true))
+
+	// List of containers is still valid
+	containers := engine.Containers()
+	assert.Len(t, containers, 1)
+	assert.Equal(t, containers[0].Id, "c2")
+
+	client.Mock.AssertExpectations(t)
 }

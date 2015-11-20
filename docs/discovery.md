@@ -15,7 +15,18 @@ Docker Swarm comes with multiple Discovery backends.
 
 ## Backends
 
+You use a hosted discovery service with Docker Swarm. The service
+maintains a list of IPs in your swam. There are several available
+services, such as `etcd`, `consul` and `zookeeper` depending on what
+is best suited for your environment. You can even use a static
+file. Docker Hub also provides a hosted discovery service which you
+can use.
+
 ### Hosted Discovery with Docker Hub
+
+This example uses the hosted discovery service on Docker Hub. Using
+Docker Hub's hosted discovery service requires that each node in the
+swarm is connected to the internet. To create your swarm:
 
 First we create a cluster.
 
@@ -208,11 +219,14 @@ And for the `nodes` discovery method.
 
 ## Contributing a new discovery backend
 
-You can contribute a new discovery backend to Swarm. For information on how to do this, see [our discovery README in the Docker Swarm repository](https://github.com/docker/swarm/blob/master/discovery/README.md).
+You can contribute a new discovery backend to Swarm. For information on how to
+do this, see <a
+href="https://github.com/docker/swarm/blob/master/discovery/README.md">our
+discovery README in the Docker Swarm repository</a>.
 
 ## Docker Swarm documentation index
 
-- [User guide](index.md)
-- [Sheduler strategies](/scheduler/strategy.md)
-- [Sheduler filters](/scheduler/filter.md)
-- [Swarm API](/api/swarm-api.md)
+- [User guide]()
+- [Scheduler strategies](scheduler/strategy.md)
+- [Scheduler filters](scheduler/filter.md)
+- [Swarm API](api/swarm-api.md)

@@ -84,6 +84,8 @@ func TestContainerLookup(t *testing.T) {
 	n := createEngine(t, "test-engine", container1, container2)
 	c.engines[n.ID] = n
 
+	assert.Equal(t, len(c.Containers()), 2)
+
 	// Invalid lookup
 	assert.Nil(t, c.Container("invalid-id"))
 	assert.Nil(t, c.Container(""))
@@ -127,7 +129,9 @@ func TestImportImage(t *testing.T) {
 	client.On("Version").Return(mockVersion, nil)
 	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil)
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 
 	// connect client
 	engine.ConnectWithClient(client)
@@ -139,9 +143,9 @@ func TestImportImage(t *testing.T) {
 	readCloser := nopCloser{bytes.NewBufferString("ok")}
 	client.On("ImportImage", mock.Anything, mock.Anything, mock.Anything, mock.AnythingOfType("*io.PipeReader")).Return(readCloser, nil).Once()
 
-	callback := func(what, status string) {
+	callback := func(what, status string, err error) {
 		// import success
-		assert.Equal(t, status, "Import success")
+		assert.Nil(t, err)
 	}
 	c.Import("-", "testImageOK", "latest", bytes.NewReader(nil), callback)
 
@@ -150,9 +154,9 @@ func TestImportImage(t *testing.T) {
 	err := fmt.Errorf("Import error")
 	client.On("ImportImage", mock.Anything, mock.Anything, mock.Anything, mock.AnythingOfType("*io.PipeReader")).Return(readCloser, err).Once()
 
-	callback = func(what, status string) {
+	callback = func(what, status string, err error) {
 		// import error
-		assert.Equal(t, status, "Import error")
+		assert.NotNil(t, err)
 	}
 	c.Import("-", "testImageError", "latest", bytes.NewReader(nil), callback)
 }
@@ -175,7 +179,9 @@ func TestLoadImage(t *testing.T) {
 	client.On("Version").Return(mockVersion, nil)
 	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
 	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil).Once()
-	client.On("ListImages").Return([]*dockerclient.Image{}, nil)
+	client.On("ListImages", mock.Anything).Return([]*dockerclient.Image{}, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
 
 	// connect client
 	engine.ConnectWithClient(client)
@@ -185,18 +191,59 @@ func TestLoadImage(t *testing.T) {
 
 	// load success
 	client.On("LoadImage", mock.AnythingOfType("*io.PipeReader")).Return(nil).Once()
-	callback := func(what, status string) {
-		//if load OK, will not come here
-		t.Fatalf("Load error")
+	callback := func(what, status string, err error) {
+		//if load OK, err will be nil
+		assert.Nil(t, err)
 	}
 	c.Load(bytes.NewReader(nil), callback)
 
 	// load error
 	err := fmt.Errorf("Load error")
 	client.On("LoadImage", mock.AnythingOfType("*io.PipeReader")).Return(err).Once()
-	callback = func(what, status string) {
-		// load error
-		assert.Equal(t, status, "Load error")
+	callback = func(what, status string, err error) {
+		// load error, err is not nil
+		assert.NotNil(t, err)
 	}
 	c.Load(bytes.NewReader(nil), callback)
+}
+
+func TestTagImage(t *testing.T) {
+	// create cluster
+	c := &Cluster{
+		engines: make(map[string]*cluster.Engine),
+	}
+	images := []*dockerclient.Image{}
+
+	image1 := &dockerclient.Image{
+		Id:       "1234567890",
+		RepoTags: []string{"busybox:latest"},
+	}
+	images = append(images, image1)
+
+	// create engine
+	id := "test-engine"
+	engine := cluster.NewEngine(id, 0)
+	engine.Name = id
+	engine.ID = id
+
+	// create mock client
+	client := mockclient.NewMockClient()
+	client.On("Info").Return(mockInfo, nil)
+	client.On("Version").Return(mockVersion, nil)
+	client.On("StartMonitorEvents", mock.Anything, mock.Anything, mock.Anything).Return()
+	client.On("ListContainers", true, false, "").Return([]dockerclient.Container{}, nil).Once()
+	client.On("ListImages", mock.Anything).Return(images, nil)
+	client.On("ListVolumes", mock.Anything).Return([]*dockerclient.Volume{}, nil)
+	client.On("ListNetworks", mock.Anything).Return([]*dockerclient.NetworkResource{}, nil)
+
+	// connect client
+	engine.ConnectWithClient(client)
+
+	// add engine to cluster
+	c.engines[engine.ID] = engine
+
+	// tag image
+	client.On("TagImage", mock.Anything, mock.Anything, mock.Anything, false).Return(nil).Once()
+	assert.Nil(t, c.TagImage("busybox", "test_busybox", "latest", false))
+	assert.NotNil(t, c.TagImage("busybox_not_exists", "test_busybox", "latest", false))
 }

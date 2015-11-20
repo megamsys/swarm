@@ -27,11 +27,6 @@ func getDiscovery(c *cli.Context) string {
 }
 
 var (
-	flStore = cli.StringFlag{
-		Name:  "rootdir",
-		Value: homepath(".swarm"),
-		Usage: "",
-	}
 	flJoinAdvertise = cli.StringFlag{
 		Name:   "advertise, addr",
 		Usage:  "Address of the Docker Engine joining the cluster. Swarm manager(s) MUST be able to reach the Docker Engine at this address.",
@@ -117,9 +112,19 @@ var (
 		Usage: "cluster driver options",
 		Value: &cli.StringSlice{},
 	}
+	flDiscoveryOpt = cli.StringSliceFlag{
+		Name:  "discovery-opt",
+		Usage: "discovery options",
+		Value: &cli.StringSlice{},
+	}
 
 	flLeaderElection = cli.BoolFlag{
 		Name:  "replication",
 		Usage: "Enable Swarm manager replication",
+	}
+	flLeaderTTL = cli.StringFlag{
+		Name:  "replication-ttl",
+		Value: "30s",
+		Usage: "Leader lock release time on failure",
 	}
 )

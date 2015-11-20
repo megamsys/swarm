@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,38 @@ func httpError(w http.ResponseWriter, err string, status int) {
 	http.Error(w, err, status)
 }
 
+func sendJSONMessage(w io.Writer, id, status string) {
+	message := struct {
+		ID       string      `json:"id,omitempty"`
+		Status   string      `json:"status,omitempty"`
+		Progress interface{} `json:"progressDetail,omitempty"`
+	}{
+		id,
+		status,
+		struct{}{}, // this is required by the docker cli to have a proper display
+	}
+	json.NewEncoder(w).Encode(message)
+}
+
+func sendErrorJSONMessage(w io.Writer, errorCode int, errorMessage string) {
+	error := struct {
+		Code    int    `json:"code,omitempty"`
+		Message string `json:"message,omitempty"`
+	}{
+		errorCode,
+		errorMessage,
+	}
+
+	message := struct {
+		ErrorMsg string      `json:"error,omitempty"`
+		Error    interface{} `json:"errorDetail,omitempty"`
+	}{
+		errorMessage,
+		&error,
+	}
+
+	json.NewEncoder(w).Encode(message)
+}
 func newClientAndScheme(tlsConfig *tls.Config) (*http.Client, string) {
 	if tlsConfig != nil {
 		return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, "https"
@@ -133,21 +166,36 @@ func hijack(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *http.R
 		return err
 	}
 
-	errc := make(chan error, 2)
-	cp := func(dst io.Writer, src io.Reader) {
-		_, err := io.Copy(dst, src)
+	cp := func(dst io.Writer, src io.Reader, chDone chan struct{}) {
+		io.Copy(dst, src)
 		if conn, ok := dst.(interface {
 			CloseWrite() error
 		}); ok {
 			conn.CloseWrite()
 		}
-		errc <- err
+		close(chDone)
 	}
-	go cp(d, nc)
-	go cp(nc, d)
-	<-errc
-	<-errc
+	inDone := make(chan struct{})
+	outDone := make(chan struct{})
+	go cp(d, nc, inDone)
+	go cp(nc, d, outDone)
 
+	// 1. When stdin is done, wait for stdout always
+	// 2. When stdout is done, close the stream and wait for stdin to finish
+	//
+	// On 2, stdin copy should return immediately now since the out stream is closed.
+	// Note that we probably don't actually even need to wait here.
+	//
+	// If we don't close the stream when stdout is done, in some cases stdin will hange
+	select {
+	case <-inDone:
+		// wait for out to be done
+		<-outDone
+	case <-outDone:
+		// close the conn and wait for stdin
+		nc.Close()
+		<-inDone
+	}
 	return nil
 }
 
@@ -162,4 +210,16 @@ func intValueOrZero(r *http.Request, k string) int {
 		return 0
 	}
 	return val
+}
+
+func int64ValueOrZero(r *http.Request, k string) int64 {
+	val, err := strconv.ParseInt(r.FormValue(k), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return val
+}
+
+func tagHasDigest(tag string) bool {
+	return strings.Contains(tag, ":")
 }

@@ -14,16 +14,15 @@ function teardown() {
 	start_docker_with_busybox 2
 	swarm_manage
 
-
-	# we should get 2 busyboxes, plus the header.
+	# With grouping, we should get 1 busybox, plus the header.
 	run docker_swarm images
 	[ "$status" -eq 0 ]
-	[ "${#lines[@]}" -eq 3 ]
+	[ "${#lines[@]}" -eq 2 ]
 	# Every line should contain "busybox" except for the header
 	for((i=1; i<${#lines[@]}; i++)); do
 		[[ "${lines[i]}" == *"busybox"* ]]
 	done
-	
+
 	# Try with --filter.
 	run docker_swarm images --filter node=node-0
 	[ "$status" -eq 0 ]
@@ -38,4 +37,34 @@ function teardown() {
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 2 ]
 	[[ "${lines[1]}" == *"busybox"* ]]
+
+	# Try images -a
+	# lines are: header, busybox, <none>
+	run docker_swarm images -a
+	[ "${#lines[@]}" -ge 3 ]
+}
+
+@test "docker images -f label" {
+	start_docker_with_busybox 2
+	swarm_manage
+
+	docker_swarm build -t image-with-labels $TESTDATA/imagelabel
+
+	run docker_swarm images \
+		--filter label=com.docker.swarm.test.integration.images=labeltest
+	[ "$status" -eq 0 ]
+	[ "${#lines[@]}" -eq 2 ]
+	[[ "${lines[1]}" == *"image-with-labels"* ]]
+}
+
+@test "docker images imagetag" {
+	start_docker_with_busybox 2
+	swarm_manage
+
+	docker_swarm build -t testimage:latest $TESTDATA/imagelabel
+
+	run docker_swarm images testimage
+	[ "$status" -eq 0 ]
+	[ "${#lines[@]}" -eq 2 ]
+	[[ "${lines[1]}" == *"testimage"* ]]
 }

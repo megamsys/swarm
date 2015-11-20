@@ -18,11 +18,11 @@ function teardown() {
 
 	docker_swarm pull busybox
 
-	# we should get 2 busyboxes, plus the header.
+	# with grouping, we should get 1 busybox, plus the header.
 	run docker_swarm images
 	[ "$status" -eq 0 ]
-	[ "${#lines[@]}" -eq 3 ]
-	# every line should contain "busybox" exclude the first head line 
+	[ "${#lines[@]}" -eq 2 ]
+	# every line should contain "busybox" exclude the first head line
 	for((i=1; i<${#lines[@]}; i++)); do
 		[[ "${lines[i]}" == *"busybox"* ]]
 	done
@@ -34,4 +34,28 @@ function teardown() {
 		[ "${#lines[@]}" -ge 2 ]
 		[[ "${lines[1]}" == *"busybox"* ]]
 	done
+}
+
+@test "docker pull with image digest" {
+	start_docker 2
+	swarm_manage
+
+	# make sure no image exists
+	run docker_swarm images -q
+	[ "$status" -eq 0 ]
+	[ "${#lines[@]}" -eq 0 ]
+
+	docker_swarm pull jimmyxian/busybox@sha256:649374debd26307573564fcf9748d39db33ef61fbf88ee84c3af10fd7e08765d
+
+	run docker_swarm images --digests
+	[ "$status" -eq 0 ]
+	[[ "${output}" == *"sha256:649374debd26307573564fcf9748d39db33ef61fbf88ee84c3af10fd7e08765d"* ]]
+}
+
+@test "docker pull -check error code" {
+	start_docker 2
+	swarm_manage
+
+	run docker_swarm pull does_not_exist
+	[ "$status" -eq 1 ]
 }

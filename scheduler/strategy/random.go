@@ -1,7 +1,6 @@
 package strategy
 
 import (
-	"errors"
 	"math/rand"
 	"time"
 
@@ -14,22 +13,22 @@ type RandomPlacementStrategy struct {
 	r *rand.Rand
 }
 
-// Initialize is exported
+// Initialize a RandomPlacementStrategy.
 func (p *RandomPlacementStrategy) Initialize() error {
 	p.r = rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 	return nil
 }
 
-// Name returns the name of the strategy
+// Name returns the name of the strategy.
 func (p *RandomPlacementStrategy) Name() string {
 	return "random"
 }
 
-// PlaceContainer is exported
-func (p *RandomPlacementStrategy) PlaceContainer(config *cluster.ContainerConfig, nodes []*node.Node) (*node.Node, error) {
-	if size := len(nodes); size > 0 {
-		return nodes[p.r.Intn(size)], nil
+// RankAndSort randomly sorts the list of nodes.
+func (p *RandomPlacementStrategy) RankAndSort(config *cluster.ContainerConfig, nodes []*node.Node) ([]*node.Node, error) {
+	for i := len(nodes) - 1; i > 0; i-- {
+		j := p.r.Intn(i + 1)
+		nodes[i], nodes[j] = nodes[j], nodes[i]
 	}
-
-	return nil, errors.New("No nodes running in the cluster")
+	return nodes, nil
 }
