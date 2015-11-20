@@ -112,6 +112,7 @@ func (c *Cluster) generateUniqueID() string {
 
 // CreateContainer aka schedule a brand new container into the cluster.
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
+
 	container, err := c.createContainer(config, name, false)
 
 	//  fails with image not found, then try to reschedule with soft-image-affinity
@@ -129,11 +130,12 @@ func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) 
 }
 
 func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, withSoftImageAffinity bool) (*cluster.Container, error) {
-	c.scheduler.Lock()
+	//c.scheduler.Lock()
+
 
 	// Ensure the name is available
 	if !c.checkNameUniqueness(name) {
-		c.scheduler.Unlock()
+		//c.scheduler.Unlock()
 		return nil, fmt.Errorf("Conflict: The name %s is already assigned. You have to delete (or rename) that container to be able to assign %s to a container again.", name, name)
 	}
 
@@ -168,9 +170,9 @@ func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, 
 
 	container, err := engine.Create(config, name, true)
 
-	c.scheduler.Lock()
+	//c.scheduler.Lock()
 	delete(c.pendingContainers, swarmID)
-	c.scheduler.Unlock()
+	//c.scheduler.Unlock()
 
 	return container, err
 }
@@ -770,7 +772,7 @@ func (c *Cluster) RenameContainer(container *cluster.Container, newName string) 
 
 // BuildImage build an image
 func (c *Cluster) BuildImage(buildImage *dockerclient.BuildImage, out io.Writer) error {
-	c.scheduler.Lock()
+	//c.scheduler.Lock()
 
 	// get an engine
 	config := cluster.BuildContainerConfig(dockerclient.ContainerConfig{
@@ -780,7 +782,7 @@ func (c *Cluster) BuildImage(buildImage *dockerclient.BuildImage, out io.Writer)
 	})
 	buildImage.BuildArgs = convertKVStringsToMap(config.Env)
 	nodes, err := c.scheduler.SelectNodesForContainer(c.listNodes(), config)
-	c.scheduler.Unlock()
+	//c.scheduler.Unlock()
 	if err != nil {
 		return err
 	}
