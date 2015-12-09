@@ -59,8 +59,8 @@ function teardown() {
 			 --pid=host \
 			 --memory-swappiness=2 \
 			 --group-add="root" \
-			 --memory-reservation=100 \
-			 --kernel-memory=100 \
+			 --memory-reservation=100M \
+			 --kernel-memory=100M \
 			 --dns-opt="someDnsOption" \
 			 --stop-signal="SIGKILL" \
 			 busybox sleep 1000
@@ -92,9 +92,9 @@ function teardown() {
 	# group-add
 	[[ "${output}" == *"root"* ]]
 	# memory-reservation
-	[[ "${output}" == *"\"MemoryReservation\": 100"* ]]
+	[[ "${output}" == *"\"MemoryReservation\": 104857600"* ]]
 	# kernel-memory
-	[[ "${output}" == *"\"KernelMemory\": 100"* ]]
+	[[ "${output}" == *"\"KernelMemory\": 104857600"* ]]
 	# dns-opt
 	[[ "${output}" == *"someDnsOption"* ]]
 	# stop-signal
@@ -142,7 +142,7 @@ function teardown() {
 
 	# check error message
 	[[ "${output}" != *"unable to find a node that satisfies"* ]]
-	[[ "${output}" == *"busyboxabcde:latest not found"* ]]
+	[[ "${output}" == *"busyboxabcde not found"* ]]
 }
 
 @test "docker run - with not exist volume driver" {

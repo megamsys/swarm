@@ -48,18 +48,33 @@ var (
 	}
 	flHeartBeat = cli.StringFlag{
 		Name:  "heartbeat",
-		Value: "20s",
+		Value: "60s",
 		Usage: "period between each heartbeat",
 	}
 	flTTL = cli.StringFlag{
 		Name:  "ttl",
-		Value: "60s",
+		Value: "180s",
 		Usage: "sets the expiration of an ephemeral node",
 	}
 	flTimeout = cli.StringFlag{
 		Name:  "timeout",
 		Value: "10s",
 		Usage: "timeout period",
+	}
+	flRefreshIntervalMin = cli.StringFlag{
+		Name:  "engine-refresh-min-interval",
+		Value: "30s",
+		Usage: "set engine refresh minimum interval",
+	}
+	flRefreshIntervalMax = cli.StringFlag{
+		Name:  "engine-refresh-max-interval",
+		Value: "60s",
+		Usage: "set engine refresh maximum interval",
+	}
+	flRefreshRetry = cli.IntFlag{
+		Name:  "engine-refresh-retry",
+		Value: 3,
+		Usage: "set engine refresh retry count on failure",
 	}
 	flEnableCors = cli.BoolFlag{
 		Name:  "api-enable-cors, cors",
@@ -117,7 +132,6 @@ var (
 		Usage: "discovery options",
 		Value: &cli.StringSlice{},
 	}
-
 	flLeaderElection = cli.BoolFlag{
 		Name:  "replication",
 		Usage: "Enable Swarm manager replication",

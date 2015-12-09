@@ -1,5 +1,6 @@
 package ioutils
 
+<<<<<<< HEAD
 import (
 	"errors"
 	"io"
@@ -27,6 +28,19 @@ type BytesPipe struct {
 	lastRead int      // index in the first slice to a read point
 	bufLen   int      // length of data buffered over the slices
 	closeErr error    // error to return from next Read. set to nil if not closed.
+=======
+const maxCap = 1e6
+
+// BytesPipe is io.ReadWriter which works similarly to pipe(queue).
+// All written data could be read only once. Also BytesPipe is allocating
+// and releasing new byte slices to adjust to current needs, so there won't be
+// overgrown buffer after high load peak.
+// BytesPipe isn't goroutine-safe, caller must synchronize it if needed.
+type BytesPipe struct {
+	buf      [][]byte // slice of byte-slices of buffered data
+	lastRead int      // index in the first slice to a read point
+	bufLen   int      // length of data buffered over the slices
+>>>>>>> origin/master
 }
 
 // NewBytesPipe creates new BytesPipe, initialized by specified slice.
@@ -36,15 +50,22 @@ func NewBytesPipe(buf []byte) *BytesPipe {
 	if cap(buf) == 0 {
 		buf = make([]byte, 0, 64)
 	}
+<<<<<<< HEAD
 	bp := &BytesPipe{
 		buf: [][]byte{buf[:0]},
 	}
 	bp.wait = sync.NewCond(&bp.mu)
 	return bp
+=======
+	return &BytesPipe{
+		buf: [][]byte{buf[:0]},
+	}
+>>>>>>> origin/master
 }
 
 // Write writes p to BytesPipe.
 // It can allocate new []byte slices in a process of writing.
+<<<<<<< HEAD
 func (bp *BytesPipe) Write(p []byte) (int, error) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -53,6 +74,10 @@ func (bp *BytesPipe) Write(p []byte) (int, error) {
 		if bp.closeErr != nil {
 			return written, ErrClosed
 		}
+=======
+func (bp *BytesPipe) Write(p []byte) (n int, err error) {
+	for {
+>>>>>>> origin/master
 		// write data to the last buffer
 		b := bp.buf[len(bp.buf)-1]
 		// copy data to the current empty allocated area
@@ -62,8 +87,11 @@ func (bp *BytesPipe) Write(p []byte) (int, error) {
 		// include written data in last buffer
 		bp.buf[len(bp.buf)-1] = b[:len(b)+n]
 
+<<<<<<< HEAD
 		written += n
 
+=======
+>>>>>>> origin/master
 		// if there was enough room to write all then break
 		if len(p) == n {
 			break
@@ -71,6 +99,7 @@ func (bp *BytesPipe) Write(p []byte) (int, error) {
 
 		// more data: write to the next slice
 		p = p[n:]
+<<<<<<< HEAD
 
 		// block if too much data is still in the buffer
 		for bp.bufLen >= blockThreshold {
@@ -80,11 +109,17 @@ func (bp *BytesPipe) Write(p []byte) (int, error) {
 		// allocate slice that has twice the size of the last unless maximum reached
 		nextCap := 2 * cap(bp.buf[len(bp.buf)-1])
 		if nextCap > maxCap {
+=======
+		// allocate slice that has twice the size of the last unless maximum reached
+		nextCap := 2 * cap(bp.buf[len(bp.buf)-1])
+		if maxCap < nextCap {
+>>>>>>> origin/master
 			nextCap = maxCap
 		}
 		// add new byte slice to the buffers slice and continue writing
 		bp.buf = append(bp.buf, make([]byte, 0, nextCap))
 	}
+<<<<<<< HEAD
 	bp.wait.Broadcast()
 	return written, nil
 }
@@ -105,6 +140,9 @@ func (bp *BytesPipe) CloseWithError(err error) error {
 // Close causes further reads from a BytesPipe to return immediately.
 func (bp *BytesPipe) Close() error {
 	return bp.CloseWithError(nil)
+=======
+	return
+>>>>>>> origin/master
 }
 
 func (bp *BytesPipe) len() int {
@@ -114,6 +152,7 @@ func (bp *BytesPipe) len() int {
 // Read reads bytes from BytesPipe.
 // Data could be read only once.
 func (bp *BytesPipe) Read(p []byte) (n int, err error) {
+<<<<<<< HEAD
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 	if bp.len() == 0 {
@@ -125,6 +164,8 @@ func (bp *BytesPipe) Read(p []byte) (n int, err error) {
 			return 0, bp.closeErr
 		}
 	}
+=======
+>>>>>>> origin/master
 	for {
 		read := copy(p, bp.buf[0][bp.lastRead:])
 		n += read
@@ -147,6 +188,9 @@ func (bp *BytesPipe) Read(p []byte) (n int, err error) {
 		bp.buf[0] = nil     // throw away old slice
 		bp.buf = bp.buf[1:] // switch to next
 	}
+<<<<<<< HEAD
 	bp.wait.Broadcast()
+=======
+>>>>>>> origin/master
 	return
 }

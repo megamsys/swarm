@@ -16,7 +16,7 @@ SWARM_BINARY=${SWARM_BINARY:-${SWARM_ROOT}/swarm}
 DOCKER_IMAGE=${DOCKER_IMAGE:-dockerswarm/dind-master}
 DOCKER_VERSION=${DOCKER_VERSION:-latest}
 DOCKER_BINARY=${DOCKER_BINARY:-`command -v docker`}
-DOCKER_COMPOSE_VERSION=${DOCKER_COMPOSE_VERSION:-1.5.0}
+DOCKER_COMPOSE_VERSION=${DOCKER_COMPOSE_VERSION:-1.5.2}
 
 # Port on which the manager will listen to (random port between 6000 and 7000).
 SWARM_BASE_PORT=$(( ( RANDOM % 1000 )  + 6000 ))
@@ -25,7 +25,7 @@ SWARM_BASE_PORT=$(( ( RANDOM % 1000 )  + 6000 ))
 BASE_PORT=$(( ( RANDOM % 1000 )  + 5000 ))
 
 # Drivers to use for Docker engines the tests are going to create.
-STORAGE_DRIVER=${STORAGE_DRIVER:-overlay}
+STORAGE_DRIVER=${STORAGE_DRIVER:-aufs}
 
 BUSYBOX_IMAGE="$BATS_TMPDIR/busybox.tgz"
 
@@ -82,11 +82,30 @@ function retry() {
 
 # Waits until the given docker engine API becomes reachable.
 function wait_until_reachable() {
-	retry 10 1 docker -H $1 info
+	retry 15 1 docker -H $1 info
+}
+
+# Returns true if all nodes have joined the swarm.
+function discovery_check_swarm_info() {
+	local total="$1"
+	[ -z "$total" ] && total="${#HOSTS[@]}"
+	local host="$2"
+	[ -z "$host" ] && host="${SWARM_HOSTS[0]}"
+
+	retry 10 1 eval "docker -H $host info | grep -q -e \"Nodes: $total\" -e \"Offers: $total\""
+}
+
+function swarm_manage() {
+	local i=${#SWARM_MANAGE_PID[@]}
+
+	swarm_manage_no_wait "$@"
+
+	# Wait for nodes to be discovered
+	discovery_check_swarm_info "${#HOSTS[@]}" "${SWARM_HOSTS[$i]}"
 }
 
 # Start the swarm manager in background.
-function swarm_manage() {
+function swarm_manage_no_wait() {
 	local discovery
 	if [ $# -eq 0 ]; then
 		discovery=`join , ${HOSTS[@]}`
@@ -101,6 +120,8 @@ function swarm_manage() {
 	"$SWARM_BINARY" -l debug manage -H "$host" --heartbeat=1s $discovery &
 	SWARM_MANAGE_PID[$i]=$!
 	SWARM_HOSTS[$i]=$host
+
+	# Wait for the Manager to be reachable
 	wait_until_reachable "$host"
 }
 

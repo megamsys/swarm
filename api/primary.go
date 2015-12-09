@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"net/http"
 
+	"net/http/pprof"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/swarm/cluster"
 	"github.com/gorilla/mux"
@@ -76,8 +78,8 @@ var routes = map[string]map[string]handler{
 		"/exec/{execid:.*}/start":             postExecStart,
 		"/exec/{execid:.*}/resize":            proxyContainer,
 		"/networks/create":                    postNetworksCreate,
-		"/networks/{networkid:.*}/connect":    proxyNetwork,
-		"/networks/{networkid:.*}/disconnect": proxyNetwork,
+		"/networks/{networkid:.*}/connect":    proxyNetworkContainerOperation,
+		"/networks/{networkid:.*}/disconnect": proxyNetworkContainerOperation,
 		"/volumes/create":                     postVolumesCreate,
 	},
 	"PUT": {
@@ -89,9 +91,6 @@ var routes = map[string]map[string]handler{
 		"/networks/{networkid:.*}": deleteNetworks,
 		"/volumes/{name:.*}":       deleteVolumes,
 	},
-	"OPTIONS": {
-		"": optionsHandler,
-	},
 }
 
 func writeCorsHeaders(w http.ResponseWriter, r *http.Request) {
@@ -100,8 +99,21 @@ func writeCorsHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
 }
 
+func profilerSetup(mainRouter *mux.Router, path string) {
+	var r = mainRouter.PathPrefix(path).Subrouter()
+	r.HandleFunc("/pprof/", pprof.Index)
+	r.HandleFunc("/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/pprof/profile", pprof.Profile)
+	r.HandleFunc("/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	r.HandleFunc("/pprof/block", pprof.Handler("block").ServeHTTP)
+	r.HandleFunc("/pprof/heap", pprof.Handler("heap").ServeHTTP)
+	r.HandleFunc("/pprof/goroutine", pprof.Handler("goroutine").ServeHTTP)
+	r.HandleFunc("/pprof/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
+}
+
 // NewPrimary creates a new API router.
-func NewPrimary(cluster cluster.Cluster, tlsConfig *tls.Config, status StatusHandler, enableCors bool) *mux.Router {
+func NewPrimary(cluster cluster.Cluster, tlsConfig *tls.Config, status StatusHandler, debug, enableCors bool) *mux.Router {
 	// Register the API events handler in the cluster.
 	eventsHandler := newEventsHandler()
 	cluster.RegisterEventHandler(eventsHandler)
@@ -114,12 +126,23 @@ func NewPrimary(cluster cluster.Cluster, tlsConfig *tls.Config, status StatusHan
 	}
 
 	r := mux.NewRouter()
+	setupPrimaryRouter(r, context, enableCors)
+
+	if debug {
+		profilerSetup(r, "/debug/")
+	}
+
+	return r
+}
+
+func setupPrimaryRouter(r *mux.Router, context *context, enableCors bool) {
 	for method, mappings := range routes {
 		for route, fct := range mappings {
 			log.WithFields(log.Fields{"method": method, "route": route}).Debug("Registering HTTP route")
 
 			localRoute := route
 			localFct := fct
+
 			wrap := func(w http.ResponseWriter, r *http.Request) {
 				log.WithFields(log.Fields{"method": r.Method, "uri": r.RequestURI}).Debug("HTTP request received")
 				if enableCors {
@@ -131,8 +154,25 @@ func NewPrimary(cluster cluster.Cluster, tlsConfig *tls.Config, status StatusHan
 
 			r.Path("/v{version:[0-9.]+}" + localRoute).Methods(localMethod).HandlerFunc(wrap)
 			r.Path(localRoute).Methods(localMethod).HandlerFunc(wrap)
+
+			if enableCors {
+				optionsMethod := "OPTIONS"
+				localFct = optionsHandler
+
+				wrap := func(w http.ResponseWriter, r *http.Request) {
+					log.WithFields(log.Fields{"method": optionsMethod, "uri": r.RequestURI}).
+						Debug("HTTP request received")
+					if enableCors {
+						writeCorsHeaders(w, r)
+					}
+					localFct(context, w, r)
+				}
+
+				r.Path("/v{version:[0-9.]+}" + localRoute).
+					Methods(optionsMethod).HandlerFunc(wrap)
+				r.Path(localRoute).Methods(optionsMethod).
+					HandlerFunc(wrap)
+			}
 		}
 	}
-
-	return r
 }
