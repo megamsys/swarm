@@ -134,7 +134,7 @@ func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) 
 }
 
 func (c *Cluster) createContainer(config *cluster.ContainerConfig, name string, withSoftImageAffinity bool) (*cluster.Container, error) {
-	//c.scheduler.Lock()
+	c.scheduler.Lock()
 
 
 	// Ensure the name is available
