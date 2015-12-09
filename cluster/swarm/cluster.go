@@ -28,8 +28,10 @@ type pendingContainer struct {
 
 func (p *pendingContainer) ToContainer() *cluster.Container {
 	container := &cluster.Container{
-		Container: dockerclient.Container{},
-		Config:    p.Config,
+		Container: dockerclient.Container{
+			Labels: p.Config.Labels,
+		},
+		Config: p.Config,
 		Info: dockerclient.ContainerInfo{
 			HostConfig: &dockerclient.HostConfig{},
 		},
@@ -54,11 +56,12 @@ type Cluster struct {
 	pendingContainers map[string]*pendingContainer
 
 	overcommitRatio float64
+	engineOpts      *cluster.EngineOpts
 	TLSConfig       *tls.Config
 }
 
 // NewCluster is exported
-func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery discovery.Discovery, options cluster.DriverOpts) (cluster.Cluster, error) {
+func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery discovery.Discovery, options cluster.DriverOpts, engineOptions *cluster.EngineOpts) (cluster.Cluster, error) {
 	log.WithFields(log.Fields{"name": "swarm"}).Debug("Initializing cluster")
 
 	cluster := &Cluster{
@@ -68,6 +71,7 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, discovery
 		discovery:         discovery,
 		pendingContainers: make(map[string]*pendingContainer),
 		overcommitRatio:   0.05,
+		engineOpts:        engineOptions,
 	}
 
 	if val, ok := options.Float("swarm.overcommit", ""); ok {
@@ -211,7 +215,7 @@ func (c *Cluster) addEngine(addr string) bool {
 		return false
 	}
 
-	engine := cluster.NewEngine(addr, c.overcommitRatio)
+	engine := cluster.NewEngine(addr, c.overcommitRatio, c.engineOpts)
 	if err := engine.RegisterEventHandler(c); err != nil {
 		log.Error(err)
 	}
@@ -732,6 +736,7 @@ func (c *Cluster) Info() [][]string {
 
 	for _, engine := range engines {
 		info = append(info, []string{engine.Name, engine.Addr})
+		info = append(info, []string{" └ Status", engine.Status()})
 		info = append(info, []string{" └ Containers", fmt.Sprintf("%d", len(engine.Containers()))})
 		info = append(info, []string{" └ Reserved CPUs", fmt.Sprintf("%d / %d", engine.UsedCpus(), engine.TotalCpus())})
 		info = append(info, []string{" └ Reserved Memory", fmt.Sprintf("%s / %s", units.BytesSize(float64(engine.UsedMemory())), units.BytesSize(float64(engine.TotalMemory())))})

@@ -12,7 +12,7 @@ function execute() {
 }
 
 # Tests to run. Defaults to all.
-TESTS=${@:-. compose discovery api mesos/api mesos/compose}
+TESTS=${@:-. compose discovery api mesos/api mesos/compose mesos/zk}
 
 # Generate a temporary binary for the tests.
 export SWARM_BINARY=`mktemp`
@@ -25,7 +25,7 @@ execute chmod +x /usr/local/bin/docker-compose
 execute time go build -o "$SWARM_BINARY" ../..
 
 # Start the docker engine.
-execute docker --daemon --log-level=panic \
+execute docker daemon --log-level=panic \
 	--storage-driver="$STORAGE_DRIVER" &
 DOCKER_PID=$!
 

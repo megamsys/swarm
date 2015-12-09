@@ -10,6 +10,8 @@ import (
 	"github.com/docker/swarm/cluster"
 )
 
+const eventFmt string = "{%q:%q,%q:%q,%q:%q,%q:%d,%q:{%q:%q,%q:%q,%q:%q,%q:%q}}\n"
+
 // EventsHandler broadcasts events to multiple client listeners.
 type eventsHandler struct {
 	sync.RWMutex
@@ -44,8 +46,16 @@ func (eh *eventsHandler) Wait(remoteAddr string, until int64) {
 		timer = time.NewTimer(dur)
 	}
 
+	// subscribe to http client close event
+	w := eh.ws[remoteAddr]
+	var closeNotify <-chan bool
+	if closeNotifier, ok := w.(http.CloseNotifier); ok {
+		closeNotify = closeNotifier.CloseNotify()
+	}
+
 	select {
 	case <-eh.cs[remoteAddr]:
+	case <-closeNotify:
 	case <-timer.C: // `--until` timeout
 		close(eh.cs[remoteAddr])
 	}
@@ -66,7 +76,7 @@ func (eh *eventsHandler) cleanupHandler(remoteAddr string) {
 func (eh *eventsHandler) Handle(e *cluster.Event) error {
 	eh.RLock()
 
-	str := fmt.Sprintf("{%q:%q,%q:%q,%q:%q,%q:%d,%q:{%q:%q,%q:%q,%q:%q,%q:%q}}",
+	str := fmt.Sprintf(eventFmt,
 		"status", e.Status,
 		"id", e.Id,
 		"from", e.From+" node:"+e.Engine.Name,

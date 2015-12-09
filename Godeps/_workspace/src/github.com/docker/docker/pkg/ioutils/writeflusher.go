@@ -1,12 +1,16 @@
 package ioutils
 
 import (
+<<<<<<< HEAD
 	"errors"
+=======
+>>>>>>> origin/master
 	"io"
 	"net/http"
 	"sync"
 )
 
+<<<<<<< HEAD
 // WriteFlusher wraps the Write and Flush operation ensuring that every write
 // is a flush. In addition, the Close method can be called to intercept
 // Read/Write calls if the targets lifecycle has already ended.
@@ -32,11 +36,28 @@ func (wf *WriteFlusher) Write(b []byte) (n int, err error) {
 
 	n, err = wf.w.Write(b)
 	wf.flush() // every write is a flush.
+=======
+// WriteFlusher wraps the Write and Flush operation.
+type WriteFlusher struct {
+	sync.Mutex
+	w       io.Writer
+	flusher http.Flusher
+	flushed bool
+}
+
+func (wf *WriteFlusher) Write(b []byte) (n int, err error) {
+	wf.Lock()
+	defer wf.Unlock()
+	n, err = wf.w.Write(b)
+	wf.flushed = true
+	wf.flusher.Flush()
+>>>>>>> origin/master
 	return n, err
 }
 
 // Flush the stream immediately.
 func (wf *WriteFlusher) Flush() {
+<<<<<<< HEAD
 	wf.mu.Lock()
 	defer wf.mu.Unlock()
 
@@ -49,6 +70,10 @@ func (wf *WriteFlusher) flush() {
 		return
 	}
 
+=======
+	wf.Lock()
+	defer wf.Unlock()
+>>>>>>> origin/master
 	wf.flushed = true
 	wf.flusher.Flush()
 }
@@ -56,6 +81,7 @@ func (wf *WriteFlusher) flush() {
 // Flushed returns the state of flushed.
 // If it's flushed, return true, or else it return false.
 func (wf *WriteFlusher) Flushed() bool {
+<<<<<<< HEAD
 	// BUG(stevvooe): Remove this method. Its use is inherently racy. Seems to
 	// be used to detect whether or a response code has been issued or not.
 	// Another hook should be used instead.
@@ -80,6 +106,13 @@ func (wf *WriteFlusher) Close() error {
 	return nil
 }
 
+=======
+	wf.Lock()
+	defer wf.Unlock()
+	return wf.flushed
+}
+
+>>>>>>> origin/master
 // NewWriteFlusher returns a new WriteFlusher.
 func NewWriteFlusher(w io.Writer) *WriteFlusher {
 	var flusher http.Flusher

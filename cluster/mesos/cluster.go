@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ type Cluster struct {
 	offerTimeout        time.Duration
 	taskCreationTimeout time.Duration
 	pendingTasks        *queue.Queue
+	engineOpts          *cluster.EngineOpts
 }
 
 const (
@@ -44,7 +46,7 @@ const (
 	defaultDockerEnginePort    = "2375"
 	defaultDockerEngineTLSPort = "2376"
 	dockerPortAttribute        = "docker_port"
-	defaultOfferTimeout        = 10 * time.Minute
+	defaultOfferTimeout        = 30 * time.Second
 	defaultTaskCreationTimeout = 5 * time.Second
 )
 
@@ -54,9 +56,13 @@ var (
 )
 
 // NewCluster for mesos Cluster creation
-func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, master string, options cluster.DriverOpts) (cluster.Cluster, error) {
+func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, master string, options cluster.DriverOpts, engineOptions *cluster.EngineOpts) (cluster.Cluster, error) {
 	log.WithFields(log.Fields{"name": "mesos"}).Debug("Initializing cluster")
 
+	// Enabling mesos-go glog logging
+	if log.GetLevel() == log.DebugLevel {
+		flag.Lookup("logtostderr").Value.Set("true")
+	}
 	cluster := &Cluster{
 		dockerEnginePort:    defaultDockerEnginePort,
 		master:              master,
@@ -66,6 +72,7 @@ func NewCluster(scheduler *scheduler.Scheduler, TLSConfig *tls.Config, master st
 		options:             &options,
 		offerTimeout:        defaultOfferTimeout,
 		taskCreationTimeout: defaultTaskCreationTimeout,
+		engineOpts:          engineOptions,
 	}
 
 	cluster.pendingTasks = queue.NewQueue()

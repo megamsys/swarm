@@ -19,8 +19,9 @@ can use.
 
 ### Hosted Discovery with Docker Hub
 
-This example uses the hosted discovery service on Docker Hub. Using
-Docker Hub's hosted discovery service requires that each node in the
+This example uses the hosted discovery service on Docker Hub. It is not
+meant to be used in production scenarios but for development/testing only.
+Using Docker Hub's hosted discovery service requires that each node in the
 swarm is connected to the internet. To create your swarm:
 
 First we create a cluster.
@@ -279,7 +280,7 @@ Add a new node to the discovery service.
 
 ## Docker Swarm documentation index
 
-- [User guide](./index.md)
-- [Scheduler strategies](./scheduler/strategy.md)
-- [Scheduler filters](./scheduler/filter.md)
-- [Swarm API](./API.md)
+- [User guide](../docs/index.md)
+- [Scheduler strategies](../docs/scheduler/strategy.md)
+- [Scheduler filters](../docs/scheduler/filter.md)
+- [Swarm API](../docs/api/swarm-api.md)

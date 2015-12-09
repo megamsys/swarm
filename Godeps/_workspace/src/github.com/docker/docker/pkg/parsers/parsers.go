@@ -84,6 +84,7 @@ func ParseTCPAddr(tryAddr string, defaultAddr string) (string, error) {
 	// https://github.com/golang/go/issues/6530.
 	if strings.HasSuffix(addr, "]:") {
 		addr += defaultPort
+<<<<<<< HEAD
 	}
 
 	u, err := url.Parse("tcp://" + addr)
@@ -96,6 +97,20 @@ func ParseTCPAddr(tryAddr string, defaultAddr string) (string, error) {
 		return "", fmt.Errorf("Invalid bind address format: %s", tryAddr)
 	}
 
+=======
+	}
+
+	u, err := url.Parse("tcp://" + addr)
+	if err != nil {
+		return "", err
+	}
+
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return "", fmt.Errorf("Invalid bind address format: %s", tryAddr)
+	}
+
+>>>>>>> origin/master
 	if host == "" {
 		host = defaultHost
 	}
@@ -107,7 +122,15 @@ func ParseTCPAddr(tryAddr string, defaultAddr string) (string, error) {
 		return "", fmt.Errorf("Invalid bind address format: %s", tryAddr)
 	}
 
+<<<<<<< HEAD
 	return fmt.Sprintf("tcp://%s%s", net.JoinHostPort(host, port), u.Path), nil
+=======
+	if net.ParseIP(host).To4() == nil && strings.Contains(host, ":") {
+		// This is either an ipv6 address
+		host = "[" + host + "]"
+	}
+	return fmt.Sprintf("tcp://%s:%d%s", host, p, u.Path), nil
+>>>>>>> origin/master
 }
 
 // ParseRepositoryTag gets a repos name and returns the right reposName + tag|digest
