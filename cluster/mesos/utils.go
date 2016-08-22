@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/pkg/units"
+	"github.com/docker/go-units"
 	"github.com/mesos/mesos-go/mesosproto"
 )
 
@@ -36,17 +36,4 @@ func sumScalarResourceValue(offers map[string]*mesosproto.Offer, name string) fl
 		}
 	}
 	return value
-}
-
-func getPorts(offer *mesosproto.Offer) (ports []uint64) {
-	for _, resource := range offer.Resources {
-		if resource.GetName() == "ports" {
-			for _, rang := range resource.GetRanges().GetRange() {
-				for i := rang.GetBegin(); i <= rang.GetEnd(); i++ {
-					ports = append(ports, i)
-				}
-			}
-		}
-	}
-	return ports
 }

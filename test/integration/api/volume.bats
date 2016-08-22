@@ -11,7 +11,7 @@ function teardown() {
 	start_docker_with_busybox 2
 	swarm_manage
 
-	# make sure no volume exist
+	# make sure no volume exists
 	run docker_swarm volume ls
 	[ "${#lines[@]}" -eq 1 ]
 
@@ -32,14 +32,18 @@ function teardown() {
 	swarm_manage
 
 	# run
-	docker_swarm run -d -v=/tmp busybox true
+	docker_swarm run -d -v=/tmp -e constraint:node==node-0 busybox true
 
 	run docker_swarm volume ls -q
 	[ "${#lines[@]}" -eq 1 ]
+	[[ "${output}" == *"node-0/"* ]]
 
-	run docker_swarm volume inspect ${output}
-	[ "${#lines[@]}" -eq 7 ]
+	id=${output}
+
+	run docker_swarm volume inspect $id
 	[[ "${output}" == *"\"Driver\": \"local\""* ]]
+
+	diff <(docker_swarm volume inspect $id) <(docker -H ${HOSTS[0]} volume inspect ${id#node-0/})
 }
 
 @test "docker volume create" {
@@ -56,26 +60,38 @@ function teardown() {
 	docker_swarm run -d -v=/tmp busybox true
 	run docker_swarm volume ls
 	[ "${#lines[@]}" -eq 4 ]
+
+	run docker_swarm volume create --name=node-2/test_volume2
+	[ "$status" -ne 0 ]
+
+	docker_swarm volume create --name=node-0/test_volume2
+	run docker_swarm volume ls
+	[ "${#lines[@]}" -eq 5 ]
 }
 
 @test "docker volume rm" {
 	start_docker_with_busybox 2
 	swarm_manage
 
+	# check for failure when removing a non-existent volume
 	run docker_swarm volume rm test_volume
 	[ "$status" -ne 0 ]
 
+	# run a container that exits immediately but stays around and
+	# connected to the volume. Wait for it to finish.
 	docker_swarm run -d --name=test_container -v=/tmp busybox true
-	
+	docker_swarm wait test_container
+
 	run docker_swarm volume ls -q
 	volume=${output}
 	[ "${#lines[@]}" -eq 1 ]
 
+	# check that removing an attached volume is an error
 	run docker_swarm volume rm $volume
 	[ "$status" -ne 0 ]
 
 	docker_swarm rm test_container
-	
+
 	run docker_swarm volume rm $volume
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 1 ]

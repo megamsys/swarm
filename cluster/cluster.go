@@ -3,13 +3,14 @@ package cluster
 import (
 	"io"
 
+	"github.com/docker/engine-api/types"
 	"github.com/samalba/dockerclient"
 )
 
 // Cluster is exported
 type Cluster interface {
 	// Create a container
-	CreateContainer(config *ContainerConfig, name string) (*Container, error)
+	CreateContainer(config *ContainerConfig, name string, authConfig *types.AuthConfig) (*Container, error)
 
 	// Remove a container
 	RemoveContainer(container *Container, force, volumes bool) error
@@ -21,10 +22,13 @@ type Cluster interface {
 	Image(IDOrName string) *Image
 
 	// Remove images from the cluster
-	RemoveImages(name string, force bool) ([]*dockerclient.ImageDelete, error)
+	RemoveImages(name string, force bool) ([]types.ImageDelete, error)
 
 	// Return all containers
 	Containers() Containers
+
+	// Start a container
+	StartContainer(container *Container, hostConfig *dockerclient.HostConfig) error
 
 	// Return container the matching `IDOrName`
 	// TODO: remove this method from the interface as we can use
@@ -35,19 +39,16 @@ type Cluster interface {
 	Networks() Networks
 
 	// Create a network
-	CreateNetwork(request *dockerclient.NetworkCreate) (*dockerclient.NetworkCreateResponse, error)
+	CreateNetwork(name string, request *types.NetworkCreate) (*types.NetworkCreateResponse, error)
 
 	// Remove a network from the cluster
 	RemoveNetwork(network *Network) error
 
 	// Create a volume
-	CreateVolume(request *dockerclient.VolumeCreateRequest) (*Volume, error)
+	CreateVolume(request *types.VolumeCreateRequest) (*types.Volume, error)
 
 	// Return all volumes
-	Volumes() []*Volume
-
-	// Return one volume from the cluster
-	Volume(name string) *Volume
+	Volumes() Volumes
 
 	// Remove volumes from the cluster
 	RemoveVolumes(name string) (bool, error)
@@ -55,14 +56,14 @@ type Cluster interface {
 	// Pull images
 	// `callback` can be called multiple time
 	//  `where` is where it is being pulled
-	//  `status` is the current status, like "", "in progress" or "downloaded
-	Pull(name string, authConfig *dockerclient.AuthConfig, callback func(where, status string, err error))
+	//  `status` is the current status, like "", "in progress" or "downloaded"
+	Pull(name string, authConfig *types.AuthConfig, callback func(where, status string, err error))
 
 	// Import image
 	// `callback` can be called multiple time
 	// `where` is where it is being imported
 	// `status` is the current status, like "", "in progress" or "imported"
-	Import(source string, repository string, tag string, imageReader io.Reader, callback func(where, status string, err error))
+	Import(source string, ref string, tag string, imageReader io.Reader, callback func(where, status string, err error))
 
 	// Load images
 	// `callback` can be called multiple time
@@ -70,9 +71,9 @@ type Cluster interface {
 	// `status` is the current status, like "", "in progress" or "loaded"
 	Load(imageReader io.Reader, callback func(what, status string, err error))
 
-	// Return some info about the cluster, like nb or containers / images
+	// Return some info about the cluster, like nb of containers / images
 	// It is pretty open, so the implementation decides what to return.
-	Info() [][]string
+	Info() [][2]string
 
 	// Return the total memory of the cluster
 	TotalMemory() int64
@@ -83,16 +84,19 @@ type Cluster interface {
 	// Register an event handler for cluster-wide events.
 	RegisterEventHandler(h EventHandler) error
 
+	// Unregister an event handler.
+	UnregisterEventHandler(h EventHandler)
+
 	// FIXME: remove this method
 	// Return a random engine
 	RANDOMENGINE() (*Engine, error)
 
-	// RenameContainer rename a container
+	// Rename a container
 	RenameContainer(container *Container, newName string) error
 
-	// BuildImage build an image
-	BuildImage(*dockerclient.BuildImage, io.Writer) error
+	// Build an image
+	BuildImage(io.Reader, *types.ImageBuildOptions, io.Writer) error
 
-	// TagImage tag an image
-	TagImage(IDOrName string, repo string, tag string, force bool) error
+	// Tag an image
+	TagImage(IDOrName string, ref string, force bool) error
 }

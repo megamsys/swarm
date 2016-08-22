@@ -1,12 +1,10 @@
 <!--[metadata]>
 +++
-title = "Docker Swarm"
+title = "Install and use Swarm"
 description = "Swarm release notes"
 keywords = ["docker, swarm, clustering, discovery, release,  notes"]
 [menu.main]
-identifier="swm_install"
-parent="mn_install"
-weight=9
+parent="workw_swarm"
 +++
 <![end-metadata]-->
 
@@ -83,6 +81,11 @@ Daemon running on each node. Other discovery service backends such as
 
 	The `swarm create` command returned the  `fe0cc96a72cf04dba8c1c4aa79536ec3`
 	token.
+
+	**Note**: This command relies on Docker Swarm's hosted discovery service. If
+	this service is having issues, this command may fail. In this case, see
+	information on using other types of [discovery backends](discovery.md). Check
+	the [status page](http://status.docker.com/) for service availability.
 
 5. Save the token in a safe place.
 

@@ -32,6 +32,11 @@ var (
 		Usage:  "Address of the Docker Engine joining the cluster. Swarm manager(s) MUST be able to reach the Docker Engine at this address.",
 		EnvVar: "SWARM_ADVERTISE",
 	}
+	flJoinRandomDelay = cli.StringFlag{
+		Name:  "delay",
+		Value: "0s",
+		Usage: "add a random delay in [0s,delay] to avoid synchronized registration",
+	}
 	flManageAdvertise = cli.StringFlag{
 		Name:   "advertise, addr",
 		Usage:  "Address of the swarm manager joining the cluster. Other swarm manager(s) MUST be able to reach the swarm manager at this address.",
@@ -54,7 +59,7 @@ var (
 	flTTL = cli.StringFlag{
 		Name:  "ttl",
 		Value: "180s",
-		Usage: "sets the expiration of an ephemeral node",
+		Usage: "set the expiration of an ephemeral node",
 	}
 	flTimeout = cli.StringFlag{
 		Name:  "timeout",
@@ -74,7 +79,12 @@ var (
 	flRefreshRetry = cli.IntFlag{
 		Name:  "engine-refresh-retry",
 		Value: 3,
-		Usage: "set engine refresh retry count on failure",
+		Usage: "deprecated; replaced by --engine-failure-retry",
+	}
+	flFailureRetry = cli.IntFlag{
+		Name:  "engine-failure-retry",
+		Value: 3,
+		Usage: "set engine failure retry count",
 	}
 	flEnableCors = cli.BoolFlag{
 		Name:  "api-enable-cors, cors",
@@ -138,7 +148,7 @@ var (
 	}
 	flLeaderTTL = cli.StringFlag{
 		Name:  "replication-ttl",
-		Value: "30s",
+		Value: "20s",
 		Usage: "Leader lock release time on failure",
 	}
 )

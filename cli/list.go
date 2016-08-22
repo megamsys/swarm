@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/codegangsta/cli"
-	"github.com/docker/swarm/discovery"
+	"github.com/docker/docker/pkg/discovery"
 )
 
 func list(c *cli.Context) {
@@ -17,6 +17,9 @@ func list(c *cli.Context) {
 	timeout, err := time.ParseDuration(c.String("timeout"))
 	if err != nil {
 		log.Fatalf("invalid --timeout: %v", err)
+	}
+	if timeout <= time.Duration(0)*time.Second {
+		log.Fatalf("--timeout should be a positive number")
 	}
 
 	d, err := discovery.New(dflag, timeout, 0, getDiscoveryOpt(c))

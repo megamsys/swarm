@@ -11,13 +11,13 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/codegangsta/cli"
+	"github.com/docker/docker/pkg/discovery"
+	kvdiscovery "github.com/docker/docker/pkg/discovery/kv"
+	"github.com/docker/leadership"
 	"github.com/docker/swarm/api"
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/cluster/mesos"
 	"github.com/docker/swarm/cluster/swarm"
-	"github.com/docker/swarm/discovery"
-	kvdiscovery "github.com/docker/swarm/discovery/kv"
-	"github.com/docker/swarm/leadership"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/filter"
 	"github.com/docker/swarm/scheduler/strategy"
@@ -33,7 +33,7 @@ type logHandler struct {
 }
 
 func (h *logHandler) Handle(e *cluster.Event) error {
-	id := e.Id
+	id := e.ID
 	// Trim IDs to 12 chars.
 	if len(id) > 12 {
 		id = id[:12]
@@ -48,17 +48,17 @@ type statusHandler struct {
 	follower  *leadership.Follower
 }
 
-func (h *statusHandler) Status() [][]string {
-	var status [][]string
+func (h *statusHandler) Status() [][2]string {
+	var status [][2]string
 
 	if h.candidate != nil && !h.candidate.IsLeader() {
-		status = [][]string{
-			{"\bRole", "replica"},
-			{"\bPrimary", h.follower.Leader()},
+		status = [][2]string{
+			{"Role", "replica"},
+			{"Primary", h.follower.Leader()},
 		}
 	} else {
-		status = [][]string{
-			{"\bRole", "primary"},
+		status = [][2]string{
+			{"Role", "primary"},
 		}
 	}
 
@@ -98,7 +98,7 @@ func loadTLSConfig(ca, cert, key string, verify bool) (*tls.Config, error) {
 }
 
 // Initialize the discovery service.
-func createDiscovery(uri string, c *cli.Context, discoveryOpt []string) discovery.Discovery {
+func createDiscovery(uri string, c *cli.Context) discovery.Backend {
 	hb, err := time.ParseDuration(c.String("heartbeat"))
 	if err != nil {
 		log.Fatalf("invalid --heartbeat: %v", err)
@@ -126,10 +126,13 @@ func getDiscoveryOpt(c *cli.Context) map[string]string {
 		kvpair := strings.SplitN(option, "=", 2)
 		options[kvpair[0]] = kvpair[1]
 	}
+	if _, ok := options["kv.path"]; !ok {
+		options["kv.path"] = "docker/swarm/nodes"
+	}
 	return options
 }
 
-func setupReplication(c *cli.Context, cluster cluster.Cluster, server *api.Server, discovery discovery.Discovery, addr string, leaderTTL time.Duration, tlsConfig *tls.Config) {
+func setupReplication(c *cli.Context, cluster cluster.Cluster, server *api.Server, discovery discovery.Backend, addr string, leaderTTL time.Duration, tlsConfig *tls.Config) {
 	kvDiscovery, ok := discovery.(*kvdiscovery.Discovery)
 	if !ok {
 		log.Fatal("Leader election is only supported with consul, etcd and zookeeper discovery.")
@@ -145,7 +148,7 @@ func setupReplication(c *cli.Context, cluster cluster.Cluster, server *api.Serve
 
 	go func() {
 		for {
-			run(candidate, server, primary, replica)
+			run(cluster, candidate, server, primary, replica)
 			time.Sleep(defaultRecoverTime)
 		}
 	}()
@@ -160,16 +163,19 @@ func setupReplication(c *cli.Context, cluster cluster.Cluster, server *api.Serve
 	server.SetHandler(primary)
 }
 
-func run(candidate *leadership.Candidate, server *api.Server, primary *mux.Router, replica *api.Replica) {
+func run(cl cluster.Cluster, candidate *leadership.Candidate, server *api.Server, primary *mux.Router, replica *api.Replica) {
 	electedCh, errCh := candidate.RunForElection()
+	var watchdog *cluster.Watchdog
 	for {
 		select {
 		case isElected := <-electedCh:
 			if isElected {
 				log.Info("Leader Election: Cluster leadership acquired")
+				watchdog = cluster.NewWatchdog(cl)
 				server.SetHandler(primary)
 			} else {
 				log.Info("Leader Election: Cluster leadership lost")
+				cl.UnregisterEventHandler(watchdog)
 				server.SetHandler(replica)
 			}
 
@@ -234,27 +240,32 @@ func manage(c *cli.Context) {
 
 	refreshMinInterval := c.Duration("engine-refresh-min-interval")
 	refreshMaxInterval := c.Duration("engine-refresh-max-interval")
-	if refreshMinInterval == time.Duration(0)*time.Second {
-		log.Fatal("minimum refresh interval should be a positive number")
+	if refreshMinInterval <= time.Duration(0)*time.Second {
+		log.Fatal("min refresh interval should be a positive number")
 	}
 	if refreshMaxInterval < refreshMinInterval {
 		log.Fatal("max refresh interval cannot be less than min refresh interval")
 	}
+	// engine-refresh-retry is deprecated
 	refreshRetry := c.Int("engine-refresh-retry")
-	if refreshRetry <= 0 {
-		log.Fatal("invalid refresh retry count")
+	if refreshRetry != 3 {
+		log.Fatal("--engine-refresh-retry is deprecated. Use --engine-failure-retry")
+	}
+	failureRetry := c.Int("engine-failure-retry")
+	if failureRetry <= 0 {
+		log.Fatal("invalid failure retry count")
 	}
 	engineOpts := &cluster.EngineOpts{
 		RefreshMinInterval: refreshMinInterval,
 		RefreshMaxInterval: refreshMaxInterval,
-		RefreshRetry:       refreshRetry,
+		FailureRetry:       failureRetry,
 	}
 
 	uri := getDiscovery(c)
 	if uri == "" {
 		log.Fatalf("discovery required to manage a cluster. See '%s manage --help'.", c.App.Name)
 	}
-	discovery := createDiscovery(uri, c, c.StringSlice("discovery-opt"))
+	discovery := createDiscovery(uri, c)
 	s, err := strategy.New(c.String("strategy"))
 	if err != nil {
 		log.Fatal(err)
@@ -304,10 +315,14 @@ func manage(c *cli.Context) {
 		if err != nil {
 			log.Fatalf("invalid --replication-ttl: %v", err)
 		}
+		if leaderTTL <= time.Duration(0)*time.Second {
+			log.Fatalf("--replication-ttl should be a positive number")
+		}
 
 		setupReplication(c, cl, server, discovery, addr, leaderTTL, tlsConfig)
 	} else {
 		server.SetHandler(api.NewPrimary(cl, tlsConfig, &statusHandler{cl, nil, nil}, c.GlobalBool("debug"), c.Bool("cors")))
+		cluster.NewWatchdog(cl)
 	}
 
 	log.Fatal(server.ListenAndServe())

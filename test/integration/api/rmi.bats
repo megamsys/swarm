@@ -85,7 +85,7 @@ function teardown() {
 
 	swarm_manage
 
-	# make sure same image id have two repo-tags
+	# make sure same image id has two repo-tags
 	docker_swarm tag busybox:latest testimage:latest
 
 	run docker_swarm images
@@ -125,13 +125,27 @@ function teardown() {
 	[[ "${output}" != *"sha256:649374debd26307573564fcf9748d39db33ef61fbf88ee84c3af10fd7e08765d"* ]]
 }
 
+@test "docker rmi via id" {
+	start_docker_with_busybox 1
+	swarm_manage
+
+	# get busybox image id
+	busybox_id=`docker_swarm images -q`
+
+	docker_swarm rmi $busybox_id
+
+	run docker_swarm images -q
+	[ "$status" -eq 0 ]
+	[ "${#lines[@]}" -eq 0 ]
+}
+
 @test "docker rmi --force with image tag" {
 	start_docker_with_busybox 1
 	start_docker 1
 
 	swarm_manage
 
-	# make sure same image id have two repo-tags
+	# make sure same image id has two repo-tags
 	docker_swarm tag busybox:latest testimage:tag1
 	docker_swarm tag busybox:latest testimage:tag2
 

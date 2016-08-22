@@ -1,15 +1,15 @@
 <!--[metadata]>
 +++
-title = "Docker Swarm filters"
+title = "Filters"
 description = "Swarm filters"
 keywords = ["docker, swarm, clustering,  filters"]
 [menu.main]
-parent="smn_workw_swarm"
+parent="swarm_sched"
 weight=4
 +++
 <![end-metadata]-->
 
-# Filters
+# Swarm filters
 
 Filters tell Docker Swarm scheduler which nodes to use when creating and running
 a container.
@@ -25,6 +25,7 @@ Each filter has a name that identifies it. The node filters are:
 
 * `constraint`
 * `health`
+* `containerslots`
 
 The container configuration filters are:
 
@@ -36,7 +37,7 @@ When you start a Swarm manager with the `swarm manage` command, all the filters
 are enabled. If you want to limit the filters available to your Swarm, specify a subset
 of filters by passing the `--filter` flag and the name:
 
-```
+```bash
 $ swarm manage --filter=health --filter=dependency
 ```
 
@@ -48,12 +49,14 @@ $ swarm manage --filter=health --filter=dependency
 
 When creating a container or building an image, you use a `constraint` or
 `health` filter to select a subset of nodes to consider for scheduling.
+If a node in Swarm cluster has a label with key `containerslots`
+and a number-value, Swarm will not launch more containers than the given number.
 
 ### Use a constraint filter
 
 Node constraints can refer to Docker's default tags or to custom labels. Default
 tags are sourced from `docker info`. Often, they relate to properties of the Docker
-host. Currently, the dafult tags include:
+host. Currently, the default tags include:
 
 * `node` to refer to the node by ID or name
 * `storagedriver`
@@ -63,9 +66,8 @@ host. Currently, the dafult tags include:
 
 Custom node labels you apply when you start the `docker daemon`, for example:
 
-```
-$ docker daemon --label com.example.environment="production" --label
-com.example.storage="ssd"
+```bash
+$ docker daemon --label com.example.environment="production" --label com.example.storage="ssd"
 ```
 
 Then, when you start a container on the cluster, you can set constraints using
@@ -86,46 +88,50 @@ To specify custom label for a node, pass a list of `--label`
 options at `docker` startup time. For instance, to start `node-1` with the
 `storage=ssd` label:
 
-    $ docker daemon --label storage=ssd
-    $ swarm join --advertise=192.168.0.42:2375 token://XXXXXXXXXXXXXXXXXX
+```bash
+$ docker daemon --label storage=ssd
+$ swarm join --advertise=192.168.0.42:2375 token://XXXXXXXXXXXXXXXXXX
+```
 
 You might start a different `node-2` with `storage=disk`:
 
-    $ docker daemon --label storage=disk
-    $ swarm join --advertise=192.168.0.43:2375 token://XXXXXXXXXXXXXXXXXX
+```bash
+$ docker daemon --label storage=disk
+$ swarm join --advertise=192.168.0.43:2375 token://XXXXXXXXXXXXXXXXXX
+```
 
-Once the nodes are joined to a cluster, the Swarm master pulls their respective
-tags.  Moving forward, the master takes the tags into account when scheduling
+Once the nodes are joined to a cluster, the Swarm manager pulls their respective
+tags.  Moving forward, the manager takes the tags into account when scheduling
 new containers.
 
 Continuing the previous example, assuming your cluster with `node-1` and
 `node-2`, you can run a MySQL server container on the cluster.  When you run the
 container, you can use a `constraint` to ensure the database gets good I/O
-performance. You do this by by filter for nodes with flash drives:
+performance. You do this by filtering for nodes with flash drives:
 
 ```bash
-$ docker run -d -P -e constraint:storage==ssd --name db mysql
+$ docker tcp://<manager_ip:manager_port>  run -d -P -e constraint:storage==ssd --name db mysql
 f8b693db9cd6
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-f8b693db9cd6        mysql:latest        "mysqld"            Less than a second ago   running             192.168.0.42:49178->3306/tcp    node-1      db
+$ docker tcp://<manager_ip:manager_port>  ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+f8b693db9cd6        mysql:latest        "mysqld"            Less than a second ago   running             192.168.0.42:49178->3306/tcp    node-1/db
 ```
 
-In this example, the master selected all nodes that met the `storage=ssd`
+In this example, the manager selected all nodes that met the `storage=ssd`
 constraint and applied resource management on top of them.   Only `node-1` was
 selected because it's the only host running flash.
 
-Suppose you want run an Nginx frontend in a cluster. In this case, you wouldn't want flash drives because the frontend mostly writes logs to disk.
+Suppose you want to run an Nginx frontend in a cluster. In this case, you wouldn't want flash drives because the frontend mostly writes logs to disk.
 
 ```bash
-$ docker run -d -P -e constraint:storage==disk --name frontend nginx
+$ docker tcp://<manager_ip:manager_port> run -d -P -e constraint:storage==disk --name frontend nginx
 963841b138d8
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-963841b138d8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.43:49177->80/tcp      node-2      frontend
-f8b693db9cd6        mysql:latest        "mysqld"            Up About a minute        running             192.168.0.42:49178->3306/tcp    node-1      db
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+963841b138d8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.43:49177->80/tcp      node-2/frontend
+f8b693db9cd6        mysql:latest        "mysqld"            Up About a minute        running             192.168.0.42:49178->3306/tcp    node-1/db
 ```
 
 The scheduler selected `node-2` since it was started with the `storage=disk` label.
@@ -133,35 +139,37 @@ The scheduler selected `node-2` since it was started with the `storage=disk` lab
 Finally, build args can be used to apply node constraints to a `docker build`.
 Again, you'll avoid flash drives.
 
-    $ mkdir sinatra
-    $ cd sinatra
-    $ echo "FROM ubuntu:14.04" > Dockerfile
-    $ echo "MAINTAINER Kate Smith <ksmith@example.com>" >> Dockerfile
-    $ echo "RUN apt-get update && apt-get install -y ruby ruby-dev" >> Dockerfile
-    $ echo "RUN gem install sinatra" >> Dockerfile
-    $ docker build --build-arg=constraint:storage==disk -t ouruser/sinatra:v2 .
-    Sending build context to Docker daemon 2.048 kB
-    Step 1 : FROM ubuntu:14.04
-     ---> a5a467fddcb8
-    Step 2 : MAINTAINER Kate Smith <ksmith@example.com>
-     ---> Running in 49e97019dcb8
-     ---> de8670dcf80e
-    Removing intermediate container 49e97019dcb8
-    Step 3 : RUN apt-get update && apt-get install -y ruby ruby-dev
-     ---> Running in 26c9fbc55aeb
-     ---> 30681ef95fff
-    Removing intermediate container 26c9fbc55aeb
-    Step 4 : RUN gem install sinatra
-     ---> Running in 68671d4a17b0
-     ---> cd70495a1514
-    Removing intermediate container 68671d4a17b0
-    Successfully built cd70495a1514
+```bash
+$ mkdir sinatra
+$ cd sinatra
+$ echo "FROM ubuntu:14.04" > Dockerfile
+$ echo "MAINTAINER Kate Smith <ksmith@example.com>" >> Dockerfile
+$ echo "RUN apt-get update && apt-get install -y ruby ruby-dev" >> Dockerfile
+$ echo "RUN gem install sinatra" >> Dockerfile
+$ docker build --build-arg=constraint:storage==disk -t ouruser/sinatra:v2 .
+Sending build context to Docker daemon 2.048 kB
+Step 1 : FROM ubuntu:14.04
+ ---> a5a467fddcb8
+Step 2 : MAINTAINER Kate Smith <ksmith@example.com>
+ ---> Running in 49e97019dcb8
+ ---> de8670dcf80e
+Removing intermediate container 49e97019dcb8
+Step 3 : RUN apt-get update && apt-get install -y ruby ruby-dev
+ ---> Running in 26c9fbc55aeb
+ ---> 30681ef95fff
+Removing intermediate container 26c9fbc55aeb
+Step 4 : RUN gem install sinatra
+ ---> Running in 68671d4a17b0
+ ---> cd70495a1514
+Removing intermediate container 68671d4a17b0
+Successfully built cd70495a1514
 
-    $ docker images
-    REPOSITORY          TAG                 IMAGE ID            CREATED             VIRTUAL SIZE
-    dockerswarm/swarm   master              8c2c56438951        2 days ago          795.7 MB
-    ouruser/sinatra     v2                  cd70495a1514        35 seconds ago      318.7 MB
-    ubuntu              14.04               a5a467fddcb8        11 days ago         187.9 MB
+$ docker images
+REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
+dockerswarm/swarm   manager             8c2c56438951        2 days ago          795.7 MB
+ouruser/sinatra     v2                  cd70495a1514        35 seconds ago      318.7 MB
+ubuntu              14.04               a5a467fddcb8        11 days ago         187.9 MB
+```
 
 ### Use the health filter
 
@@ -169,12 +177,25 @@ The node `health` filter prevents the scheduler form running containers
 on unhealthy nodes. A node is considered unhealthy if the node is down or it
 can't communicate with the cluster store.
 
+### Use the containerslots filter
+
+You may give your Docker nodes the containerslots label
+
+```bash
+$ docker daemon --label containerslots=3
+```
+
+Swarm will run up to 3 containers at this node, if all nodes are "full",
+an error is thrown indicating no suitable node can be found.
+If the value is not castable to an integer number or is not present,
+there will be no limit on container number.
+
 ## Container filters
 
 When creating a container, you can use three types of container filters:
 
 * [`affinity`](#use-an-affinity-filter)
-* [`dependency`](#use-a-depedency-filter)
+* [`dependency`](#use-a-dependency-filter)
 * [`port`](#use-a-port-filter)
 
 ### Use an affinity filter
@@ -184,7 +205,7 @@ example, you can run a container and instruct Swarm to schedule it next to
 another container based on these affinities:
 
 * container name or id
-* an image on the host 
+* an image on the host
 * a custom label applied to the container
 
 These affinities ensure that containers run on the same network node
@@ -197,26 +218,26 @@ name or ID. For example, you can start a container called `frontend` running
 `nginx`:
 
 ```bash
-$ docker run -d -p 80:80 --name frontend nginx
+$ docker tcp://<manager_ip:manager_port>  run -d -p 80:80 --name frontend nginx
  87c4376856a8
 
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1      frontend
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1/frontend
 ```
 
 Then, using `-e affinity:container==frontend` value to schedule a second
 container to locate and run next to the container named `frontend`.
 
 ```bash
-$ docker run -d --name logger -e affinity:container==frontend logger
+$ docker tcp://<manager_ip:manager_port> run -d --name logger -e affinity:container==frontend logger
  87c4376856a8
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1      frontend
-963841b138d8        logger:latest       "logger"            Less than a second ago   running                                             node-1      logger
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1/frontend
+963841b138d8        logger:latest       "logger"            Less than a second ago   running                                             node-1/logger
 ```
 
 Because of `name` affinity, the  `logger` container ends up on `node-1` along
@@ -224,7 +245,7 @@ with the `frontend` container. Instead of the `frontend` name you could have
 supplied its ID as follows:
 
 ```bash
-$ docker run -d --name logger -e affinity:container==87c4376856a8
+$ docker tcp://<manager_ip:manager_port> run -d --name logger -e affinity:container==87c4376856a8
 ```
 
 #### Example image affinity
@@ -244,25 +265,25 @@ affinity:image==redis` filter to schedule several additional containers to run
 on these nodes.
 
 ```bash
-$ docker run -d --name redis1 -e affinity:image==redis redis
-$ docker run -d --name redis2 -e affinity:image==redis redis
-$ docker run -d --name redis3 -e affinity:image==redis redis
-$ docker run -d --name redis4 -e affinity:image==redis redis
-$ docker run -d --name redis5 -e affinity:image==redis redis
-$ docker run -d --name redis6 -e affinity:image==redis redis
-$ docker run -d --name redis7 -e affinity:image==redis redis
-$ docker run -d --name redis8 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis1 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis2 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis3 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis4 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis5 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis6 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis7 -e affinity:image==redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis8 -e affinity:image==redis redis
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-87c4376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1      redis1
-1212386856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1      redis2
-87c4376639a8        redis:latest        "redis"             Less than a second ago   running                                             node-3      redis3
-1234376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1      redis4
-86c2136253a8        redis:latest        "redis"             Less than a second ago   running                                             node-3      redis5
-87c3236856a8        redis:latest        "redis"             Less than a second ago   running                                             node-3      redis6
-87c4376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-3      redis7
-963841b138d8        redis:latest        "redis"             Less than a second ago   running                                             node-1      redis8
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+87c4376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1/redis1
+1212386856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1/redis2
+87c4376639a8        redis:latest        "redis"             Less than a second ago   running                                             node-3/redis3
+1234376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-1/redis4
+86c2136253a8        redis:latest        "redis"             Less than a second ago   running                                             node-3/redis5
+87c3236856a8        redis:latest        "redis"             Less than a second ago   running                                             node-3/redis6
+87c4376856a8        redis:latest        "redis"             Less than a second ago   running                                             node-3/redis7
+963841b138d8        redis:latest        "redis"             Less than a second ago   running                                             node-1/redis8
 ```
 
 As you can see here, the containers were only scheduled on nodes that had the
@@ -273,7 +294,7 @@ $ docker images
 REPOSITORY                         TAG                       IMAGE ID            CREATED             VIRTUAL SIZE
 redis                              latest                    06a1f75304ba        2 days ago          111.1 MB
 
-$ docker run -d --name redis1 -e affinity:image==06a1f75304ba redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis1 -e affinity:image==06a1f75304ba redis
 ```
 
 #### Example label affinity
@@ -283,25 +304,25 @@ example, you can run a `nginx` container and apply the
 `com.example.type=frontend` custom label.
 
 ```bash
-$ docker run -d -p 80:80 --label com.example.type=frontend nginx
+$ docker tcp://<manager_ip:manager_port> run -d -p 80:80 --label com.example.type=frontend nginx
  87c4376856a8
 
-$ docker ps  --filter "label=com.example.type=frontend"
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1      trusting_yonath
+$ docker tcp://<manager_ip:manager_port> ps  --filter "label=com.example.type=frontend"
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1/trusting_yonath
 ```
 
-Then, use `-e affnity:com.example.type==frontend` to schedule a container next
+Then, use `-e affinity:com.example.type==frontend` to schedule a container next
 to the container with the `com.example.type==frontend` label.
 
 ```bash
-$ docker run -d -e affinity:com.example.type==frontend logger
+$ docker tcp://<manager_ip:manager_port> run -d -e affinity:com.example.type==frontend logger
  87c4376856a8
 
-$ docker ps
-CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NODE        NAMES
-87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1      trusting_yonath
-963841b138d8        logger:latest       "logger"            Less than a second ago   running                                             node-1      happy_hawking
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE               COMMAND             CREATED                  STATUS              PORTS                           NAMES
+87c4376856a8        nginx:latest        "nginx"             Less than a second ago   running             192.168.0.42:80->80/tcp         node-1/trusting_yonath
+963841b138d8        logger:latest       "logger"            Less than a second ago   running                                             node-1/happy_hawking
 ```
 
 The `logger` container ends up on `node-1` because its affinity with the
@@ -328,9 +349,9 @@ containers are running on different nodes, Swarm does not schedule the container
 ### Use a port filter
 
 When the `port` filter is enabled, a container's port configuration is used as a
-unique constraint. Docker Swarm selects a node where a particular port is 
+unique constraint. Docker Swarm selects a node where a particular port is
 available and unoccupied by another container or process. Required ports may be
-specified by mapping a host port, or using the host networking an exposing a
+specified by mapping a host port, or using the host networking and exposing a
 port using the container configuration.
 
 #### Example in bridge mode
@@ -339,12 +360,12 @@ By default, containers run on Docker's bridge network. To use the `port` filter
 with the bridge network, you run a container as follows.
 
 ```bash
-$ docker run -d -p 80:80 nginx
+$ docker tcp://<manager_ip:manager_port> run -d -p 80:80 nginx
 87c4376856a8
 
-$ docker ps
-CONTAINER ID    IMAGE               COMMAND         PORTS                       NODE        NAMES
-87c4376856a8    nginx:latest        "nginx"         192.168.0.42:80->80/tcp     node-1      prickly_engelbart
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID    IMAGE               COMMAND         PORTS                       NAMES
+87c4376856a8    nginx:latest        "nginx"         192.168.0.42:80->80/tcp     node-1/prickly_engelbart
 ```
 
 Docker Swarm selects a node where port `80` is available and unoccupied by another
@@ -353,36 +374,44 @@ that uses the host port `80` results in Swarm selecting a different node,
 because port `80` is already occupied on `node-1`:
 
 ```bash
-$ docker run -d -p 80:80 nginx
+$ docker tcp://<manager_ip:manager_port> run -d -p 80:80 nginx
 963841b138d8
 
-$ docker ps
-CONTAINER ID        IMAGE          COMMAND        PORTS                           NODE        NAMES
-963841b138d8        nginx:latest   "nginx"        192.168.0.43:80->80/tcp         node-2      dreamy_turing
-87c4376856a8        nginx:latest   "nginx"        192.168.0.42:80->80/tcp         node-1      prickly_engelbart
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID        IMAGE          COMMAND        PORTS                           NAMES
+963841b138d8        nginx:latest   "nginx"        192.168.0.43:80->80/tcp         node-2/dreamy_turing
+87c4376856a8        nginx:latest   "nginx"        192.168.0.42:80->80/tcp         node-1/prickly_engelbart
 ```
 
 Again, repeating the same command will result in the selection of `node-3`,
 since port `80` is neither available on `node-1` nor `node-2`:
 
 ```bash
-$ docker run -d -p 80:80 nginx
+$ docker tcp://<manager_ip:manager_port> run -d -p 80:80 nginx
 963841b138d8
 
-$ docker ps
-CONTAINER ID   IMAGE               COMMAND        PORTS                           NODE        NAMES
-f8b693db9cd6   nginx:latest        "nginx"        192.168.0.44:80->80/tcp         node-3      stoic_albattani
-963841b138d8   nginx:latest        "nginx"        192.168.0.43:80->80/tcp         node-2      dreamy_turing
-87c4376856a8   nginx:latest        "nginx"        192.168.0.42:80->80/tcp         node-1      prickly_engelbart
+$ docker tcp://<manager_ip:manager_port> ps
+CONTAINER ID   IMAGE               COMMAND        PORTS                           NAMES
+f8b693db9cd6   nginx:latest        "nginx"        192.168.0.44:80->80/tcp         node-3/stoic_albattani
+963841b138d8   nginx:latest        "nginx"        192.168.0.43:80->80/tcp         node-2/dreamy_turing
+87c4376856a8   nginx:latest        "nginx"        192.168.0.42:80->80/tcp         node-1/prickly_engelbart
 ```
 
 Finally, Docker Swarm will refuse to run another container that requires port
 `80`, because it is not available on any node in the cluster:
 
 ```bash
-$ docker run -d -p 80:80 nginx
+$ docker tcp://<manager_ip:manager_port> run -d -p 80:80 nginx
 2014/10/29 00:33:20 Error response from daemon: no resources available to schedule container
 ```
+
+Each container occupies port `80` on its residing node when the container
+is created and releases the port when the container is deleted. A container in `exited`
+state still owns the port. If `prickly_engelbart` on `node-1` is stopped but not
+deleted, trying to start another container on `node-1` that requires port `80` would fail
+because port `80` is associated with `prickly_engelbart`. To increase running
+instances of nginx, you can either restart `prickly_engelbart`, or start another container
+after deleting `prickly_englbart`.
 
 #### Node port filter with host networking
 
@@ -396,11 +425,11 @@ choose an available node for a new container.
 For example, the following commands start `nginx` on 3-node cluster.
 
 ```bash
-$ docker run -d --expose=80 --net=host nginx
+$ docker tcp://<manager_ip:manager_port> run -d --expose=80 --net=host nginx
 640297cb29a7
-$ docker run -d --expose=80 --net=host nginx
+$ docker tcp://<manager_ip:manager_port> run -d --expose=80 --net=host nginx
 7ecf562b1b3f
-$ docker run -d --expose=80 --net=host nginx
+$ docker tcp://<manager_ip:manager_port> run -d --expose=80 --net=host nginx
 09a92f582bc2
 ```
 
@@ -408,7 +437,7 @@ Port binding information is not available through the `docker ps` command becaus
 all the nodes were started with the `host` network.
 
 ```bash
-$ docker ps
+$ docker tcp://<manager_ip:manager_port> ps
 CONTAINER ID        IMAGE               COMMAND                CREATED                  STATUS              PORTS               NAMES
 640297cb29a7        nginx:1             "nginx -g 'daemon of   Less than a second ago   Up 30 seconds                           box3/furious_heisenberg
 7ecf562b1b3f        nginx:1             "nginx -g 'daemon of   Less than a second ago   Up 28 seconds                           box2/ecstatic_meitner
@@ -418,16 +447,16 @@ CONTAINER ID        IMAGE               COMMAND                CREATED          
 Swarm refuses the operation when trying to instantiate the 4th container.
 
 ```bash
-$  docker run -d --expose=80 --net=host nginx
+$  docker tcp://<manager_ip:manager_port> run -d --expose=80 --net=host nginx
 FATA[0000] Error response from daemon: unable to find a node with port 80/tcp available in the Host mode
 ```
 
 However, port binding to the different value, for example  `81`, is still allowed.
 
 ```bash
-$  docker run -d -p 81:80 nginx:latest
+$  docker tcp://<manager_ip:manager_port> run -d -p 81:80 nginx:latest
 832f42819adc
-$  docker ps
+$  docker tcp://<manager_ip:manager_port> ps
 CONTAINER ID        IMAGE               COMMAND                CREATED                  STATUS                  PORTS                                 NAMES
 832f42819adc        nginx:1             "nginx -g 'daemon of   Less than a second ago   Up Less than a second   443/tcp, 192.168.136.136:81->80/tcp   box3/thirsty_hawking
 640297cb29a7        nginx:1             "nginx -g 'daemon of   8 seconds ago            Up About a minute                                             box3/furious_heisenberg
@@ -441,7 +470,7 @@ To apply a node `constraint` or container `affinity` filters you must set
 environment variables on the container using filter expressions, for example:
 
 ```bash
-$ docker run -d --name redis1 -e affinity:image==~redis redis
+$ docker tcp://<manager_ip:manager_port> run -d --name redis1 -e affinity:image==~redis redis
 ```
 
 Each expression must be in the form:
@@ -450,7 +479,7 @@ Each expression must be in the form:
 <filter-type>:<key><operator><value>
 ```
 
-The `<filter-type>` is either the `affinity` or the `container` keyword. It
+The `<filter-type>` is either the `affinity` or the `constraint` keyword. It
 identifies the type filter you intend to use.
 
 The `<key>` is an alpha-numeric and must start with a letter or underscore. The
@@ -487,14 +516,13 @@ The following examples illustrate some possible expressions:
 * `constraint:node!=/foo\[bar\]/` matches all nodes, except `foo[bar]`. You can see the use of escape characters here.
 * `constraint:node==/(?i)node1/` matches node `node1` case-insensitive. So `NoDe1` or `NODE1` also match.
 * `affinity:image==~redis` tries to match for nodes running container with a `redis` image
-* `constraint:region==~us*` searches for nodes in the cluster belongs to the
-* `us` region
+* `constraint:region==~us*` searches for nodes in the cluster belonging to the `us` region
 * `affinity:container!=~redis*` schedule a new `redis5` container to a node
 without a container that satisfies `redis*`
 
 ## Related information
 
-- [User guide](../index.md)
+- [Docker Swarm overview](../index.md)
 - [Discovery options](../discovery.md)
 - [Scheduler strategies](strategy.md)
-- [Swarm API](../api/swarm-api.md)
+- [Swarm API](../swarm-api.md)

@@ -19,19 +19,19 @@ function teardown() {
 	# This should emit 3 events: create, start, die.
 	docker_swarm run -d --name test_container -e constraint:node==node-0 busybox true
 
-	# events might take a little big to show up, wait until we get the last one.
+	# events might take a little bit to show up, wait until we get the last one.
 	retry 5 0.5 grep -q "die" "$log_file"
 
 	# clean up `docker events`
 	kill "$events_pid"
 
 	# verify size
-	[[ $(wc -l < ${log_file}) == 3 ]]
+	[[ $(wc -l < ${log_file}) -ge 3 ]]
 
 	# verify content
 	run cat "$log_file"
 	[ "$status" -eq 0 ]
-	[[ "${output}" == *"node:node-0"* ]]
+	[[ "${output}" == *"node-0"* ]]
 	[[ "${output}" == *"create"* ]]
 	[[ "${output}" == *"start"* ]]
 	[[ "${output}" == *"die"* ]]
