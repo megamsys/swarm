@@ -14,40 +14,91 @@ import (
 	"strings"
 	"time"
 
-	dockerfilters "github.com/docker/docker/pkg/parsers/filters"
+	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/parsers/kernel"
+	versionpkg "github.com/docker/docker/pkg/version"
+	apitypes "github.com/docker/engine-api/types"
+	containertypes "github.com/docker/engine-api/types/container"
+	dockerfilters "github.com/docker/engine-api/types/filters"
 	"github.com/docker/swarm/cluster"
+	"github.com/docker/swarm/experimental"
 	"github.com/docker/swarm/version"
 	"github.com/gorilla/mux"
 	"github.com/samalba/dockerclient"
 )
 
 // APIVERSION is the API version supported by swarm manager
-const APIVERSION = "1.21"
+const APIVERSION = "1.22"
 
 // GET /info
 func getInfo(c *context, w http.ResponseWriter, r *http.Request) {
-	info := dockerclient.Info{
-		Containers:        int64(len(c.cluster.Containers())),
-		Images:            int64(len(c.cluster.Images().Filter(cluster.ImageFilterOptions{}))),
-		DriverStatus:      c.statusHandler.Status(),
-		NEventsListener:   int64(c.eventsHandler.Size()),
+	info := apitypes.Info{
+		Images:            len(c.cluster.Images().Filter(cluster.ImageFilterOptions{})),
+		NEventsListener:   c.eventsHandler.Size(),
 		Debug:             c.debug,
 		MemoryLimit:       true,
 		SwapLimit:         true,
+		CPUCfsPeriod:      true,
+		CPUCfsQuota:       true,
+		CPUShares:         true,
+		CPUSet:            true,
 		IPv4Forwarding:    true,
 		BridgeNfIptables:  true,
-		BridgeNfIp6tables: true,
-		NCPU:              c.cluster.TotalCpus(),
+		BridgeNfIP6tables: true,
+		OomKillDisable:    true,
+		ServerVersion:     "swarm/" + version.VERSION,
+		OperatingSystem:   runtime.GOOS,
+		Architecture:      runtime.GOARCH,
+		NCPU:              int(c.cluster.TotalCpus()),
 		MemTotal:          c.cluster.TotalMemory(),
-		HttpProxy:         os.Getenv("http_proxy"),
-		HttpsProxy:        os.Getenv("https_proxy"),
+		HTTPProxy:         os.Getenv("http_proxy"),
+		HTTPSProxy:        os.Getenv("https_proxy"),
 		NoProxy:           os.Getenv("no_proxy"),
 		SystemTime:        time.Now().Format(time.RFC3339Nano),
+		ExperimentalBuild: experimental.ENABLED,
 	}
 
-	if hostname, err := os.Hostname(); err == nil {
-		info.Name = hostname
+	// API versions older than 1.22 use DriverStatus and return \b characters in the output
+	status := c.statusHandler.Status()
+	if c.apiVersion != "" && versionpkg.Version(c.apiVersion).LessThan("1.22") {
+		for i := range status {
+			if status[i][0][:1] == " " {
+				status[i][0] = status[i][0][1:]
+			} else {
+				status[i][0] = "\b" + status[i][0]
+			}
+		}
+		info.DriverStatus = status
+	} else {
+		info.SystemStatus = status
 	}
+
+	kernelVersion := "<unknown>"
+	if kv, err := kernel.GetKernelVersion(); err != nil {
+		log.Warnf("Could not get kernel version: %v", err)
+	} else {
+		kernelVersion = kv.String()
+	}
+	info.KernelVersion = kernelVersion
+
+	for _, c := range c.cluster.Containers() {
+		info.Containers++
+		if c.Info.State.Paused {
+			info.ContainersPaused++
+		} else if c.Info.State.Running {
+			info.ContainersRunning++
+		} else {
+			info.ContainersStopped++
+		}
+	}
+
+	hostname := "<unknown>"
+	if hn, err := os.Hostname(); err != nil {
+		log.Warnf("Could not get hostname: %v", err)
+	} else {
+		hostname = hn
+	}
+	info.Name = hostname
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
@@ -55,14 +106,24 @@ func getInfo(c *context, w http.ResponseWriter, r *http.Request) {
 
 // GET /version
 func getVersion(c *context, w http.ResponseWriter, r *http.Request) {
-	version := dockerclient.Version{
-		Version:    "swarm/" + version.VERSION,
-		ApiVersion: APIVERSION,
-		GoVersion:  runtime.Version(),
-		GitCommit:  version.GITCOMMIT,
-		Os:         runtime.GOOS,
-		Arch:       runtime.GOARCH,
+	version := apitypes.Version{
+		Version:      "swarm/" + version.VERSION,
+		APIVersion:   APIVERSION,
+		GoVersion:    runtime.Version(),
+		GitCommit:    version.GITCOMMIT,
+		Os:           runtime.GOOS,
+		Arch:         runtime.GOARCH,
+		Experimental: experimental.ENABLED,
+		BuildTime:    version.BUILDTIME,
 	}
+
+	kernelVersion := "<unknown>"
+	if kv, err := kernel.GetKernelVersion(); err != nil {
+		log.Warnf("Could not get kernel version: %v", err)
+	} else {
+		kernelVersion = kv.String()
+	}
+	version.KernelVersion = kernelVersion
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(version)
@@ -77,9 +138,9 @@ func getImages(c *context, w http.ResponseWriter, r *http.Request) {
 	names := r.Form["names"]
 
 	// Create a map of engine address to the list of images it holds.
-	engineImages := make(map[string][]*cluster.Image)
+	engineImages := make(map[*cluster.Engine][]*cluster.Image)
 	for _, image := range c.cluster.Images() {
-		engineImages[image.Engine.Addr] = append(engineImages[image.Engine.Addr], image)
+		engineImages[image.Engine] = append(engineImages[image.Engine], image)
 	}
 
 	// Look for an engine that has all the images we need.
@@ -99,7 +160,7 @@ func getImages(c *context, w http.ResponseWriter, r *http.Request) {
 
 		// If the engine has all images, stop our search here.
 		if matchedImages == len(names) {
-			proxy(c.tlsConfig, engine, w, r)
+			proxy(engine, w, r)
 			return
 		}
 	}
@@ -121,14 +182,16 @@ func getImagesJSON(c *context, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: apply node filter in engine?
-	accepteds, _ := filters["node"]
+	accepteds := filters.Get("node")
 	// this struct helps grouping images
 	// but still keeps their Engine infos as an array.
-	groupImages := make(map[string]dockerclient.Image)
+	groupImages := make(map[string]apitypes.Image)
 	opts := cluster.ImageFilterOptions{
-		All:        boolValue(r, "all"),
-		NameFilter: r.FormValue("filter"),
-		Filters:    filters,
+		apitypes.ImageListOptions{
+			All:       boolValue(r, "all"),
+			MatchName: r.FormValue("filter"),
+			Filters:   filters,
+		},
 	}
 	for _, image := range c.cluster.Images().Filter(opts) {
 		if len(accepteds) != 0 {
@@ -145,16 +208,16 @@ func getImagesJSON(c *context, w http.ResponseWriter, r *http.Request) {
 		}
 
 		// grouping images by Id, and concat their RepoTags
-		if entry, existed := groupImages[image.Id]; existed {
+		if entry, existed := groupImages[image.ID]; existed {
 			entry.RepoTags = append(entry.RepoTags, image.RepoTags...)
 			entry.RepoDigests = append(entry.RepoDigests, image.RepoDigests...)
-			groupImages[image.Id] = entry
+			groupImages[image.ID] = entry
 		} else {
-			groupImages[image.Id] = image.Image
+			groupImages[image.ID] = image.Image
 		}
 	}
 
-	images := []dockerclient.Image{}
+	images := []apitypes.Image{}
 
 	for _, image := range groupImages {
 		// de-duplicate RepoTags
@@ -181,6 +244,7 @@ func getImagesJSON(c *context, w http.ResponseWriter, r *http.Request) {
 
 		images = append(images, image)
 	}
+	sort.Sort(sort.Reverse(ImageSorter(images)))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(images)
 }
@@ -198,8 +262,16 @@ func getNetworks(c *context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := []*dockerclient.NetworkResource{}
-	networks := c.cluster.Networks().Filter(filters["name"], filters["id"])
+	types := filters.Get("type")
+	for _, typ := range types {
+		if typ != "custom" && typ != "builtin" {
+			httpError(w, fmt.Sprintf("Invalid filter: 'type'='%s'", typ), http.StatusBadRequest)
+			return
+		}
+	}
+
+	out := []*apitypes.NetworkResource{}
+	networks := c.cluster.Networks().Filter(filters.Get("name"), filters.Get("id"), types)
 	for _, network := range networks {
 		tmp := (*network).NetworkResource
 		if tmp.Scope == "local" {
@@ -211,14 +283,45 @@ func getNetworks(c *context, w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// GET /networks/{networkid:.*}
+func getNetwork(c *context, w http.ResponseWriter, r *http.Request) {
+	var id = mux.Vars(r)["networkid"]
+	if network := c.cluster.Networks().Uniq().Get(id); network != nil {
+		// there could be duplicate container endpoints in network, need to remove redundant
+		// see https://github.com/docker/swarm/issues/1969
+		cleanNetwork := network.RemoveDuplicateEndpoints()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cleanNetwork.NetworkResource)
+		return
+	}
+	httpError(w, fmt.Sprintf("No such network: %s", id), http.StatusNotFound)
+}
+
+// GET /volumes/{volumename:.*}
+func getVolume(c *context, w http.ResponseWriter, r *http.Request) {
+	var name = mux.Vars(r)["volumename"]
+	if volume := c.cluster.Volumes().Get(name); volume != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(volume.Volume)
+		return
+	}
+	httpError(w, fmt.Sprintf("No such volume: %s", name), http.StatusNotFound)
+}
+
 // GET /volumes
 func getVolumes(c *context, w http.ResponseWriter, r *http.Request) {
-	volumes := struct {
-		Volumes []*cluster.Volume
-	}{c.cluster.Volumes()}
+	volumesListResponse := apitypes.VolumesListResponse{}
+
+	for _, volume := range c.cluster.Volumes() {
+		tmp := (*volume).Volume
+		if tmp.Driver == "local" {
+			tmp.Name = volume.Engine.Name + "/" + volume.Name
+		}
+		volumesListResponse.Volumes = append(volumesListResponse.Volumes, &tmp)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(volumes)
+	json.NewEncoder(w).Encode(volumesListResponse)
 }
 
 // GET /containers/ps
@@ -250,29 +353,25 @@ func getContainersJSON(c *context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filtExited := []int{}
-	if i, ok := filters["exited"]; ok {
-		for _, value := range i {
-			code, err := strconv.Atoi(value)
-			if err != nil {
-				httpError(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			filtExited = append(filtExited, code)
+	for _, value := range filters.Get("exited") {
+		code, err := strconv.Atoi(value)
+		if err != nil {
+			httpError(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		filtExited = append(filtExited, code)
 	}
-	if i, ok := filters["status"]; ok {
-		for _, value := range i {
-			if value == "exited" {
-				all = true
-			}
+	for _, value := range filters.Get("status") {
+		if value == "exited" {
+			all = true
 		}
 	}
 
 	// Filtering: select the containers we want to return.
 	candidates := []*cluster.Container{}
 	for _, container := range c.cluster.Containers() {
-		// Skip stopped containers unless -a was specified.
-		if !container.Info.State.Running && !all && before == nil && limit <= 0 {
+		// Skip stopped containers unless -a was specified
+		if (!container.Info.State.Running || !container.Engine.IsHealthy()) && !all && before == nil && limit <= 0 {
 			continue
 		}
 
@@ -286,19 +385,35 @@ func getContainersJSON(c *context, w http.ResponseWriter, r *http.Request) {
 			if !filters.Match("name", strings.TrimPrefix(container.Names[0], "/")) {
 				continue
 			}
-		} else if len(filters["name"]) > 0 {
+		} else if len(filters.Get("name")) > 0 {
 			continue
 		}
-		if !filters.Match("id", container.Id) {
+		if !filters.Match("id", container.ID) {
 			continue
 		}
 		if !filters.MatchKVList("label", container.Config.Labels) {
 			continue
 		}
-		if !filters.Match("status", container.Info.State.StateString()) {
+		if !filters.Match("status", cluster.StateString(container.Info.State)) {
 			continue
 		}
-
+		if !filters.Match("node", container.Engine.Name) {
+			continue
+		}
+		if filters.Include("volume") {
+			volumeExist := fmt.Errorf("volume mounted in container")
+			err := filters.WalkValues("volume", func(value string) error {
+				for _, mount := range container.Info.Mounts {
+					if mount.Name == value || mount.Destination == value {
+						return volumeExist
+					}
+				}
+				return nil
+			})
+			if err != volumeExist {
+				continue
+			}
+		}
 		if len(filtExited) > 0 {
 			shouldSkip := true
 			for _, code := range filtExited {
@@ -321,22 +436,22 @@ func getContainersJSON(c *context, w http.ResponseWriter, r *http.Request) {
 		candidates = candidates[:limit]
 	}
 
-	// Convert cluster.Container back into dockerclient.Container.
-	out := []*dockerclient.Container{}
+	// Convert cluster.Container back into apitypes.Container.
+	out := []*apitypes.Container{}
 	for _, container := range candidates {
 		if before != nil {
-			if container.Id == before.Id {
+			if container.ID == before.ID {
 				before = nil
 			}
 			continue
 		}
-		// Create a copy of the underlying dockerclient.Container so we can
+		// Create a copy of the underlying apitypes.Container so we can
 		// make changes without messing with cluster.Container.
 		tmp := (*container).Container
 
 		// Update the Status. The one we have is stale from the last `docker ps` the engine sent.
 		// `Status()` will generate a new one
-		tmp.Status = container.Info.State.String()
+		tmp.Status = cluster.FullStateString(container.Info.State)
 		if !container.Engine.IsHealthy() {
 			tmp.Status = "Host Down"
 		}
@@ -353,7 +468,7 @@ func getContainersJSON(c *context, w http.ResponseWriter, r *http.Request) {
 		}
 
 		// insert node IP
-		tmp.Ports = make([]dockerclient.Port, len(container.Ports))
+		tmp.Ports = make([]apitypes.Port, len(container.Ports))
 		for i, port := range container.Ports {
 			tmp.Ports[i] = port
 			if port.IP == "0.0.0.0" {
@@ -376,9 +491,20 @@ func getContainerJSON(c *context, w http.ResponseWriter, r *http.Request) {
 		httpError(w, fmt.Sprintf("No such container %s", name), http.StatusNotFound)
 		return
 	}
-	client, scheme := newClientAndScheme(c.tlsConfig)
 
-	resp, err := client.Get(scheme + "://" + container.Engine.Addr + "/containers/" + container.Id + "/json")
+	if !container.Engine.IsHealthy() {
+		httpError(w, fmt.Sprintf("Container %s running on unhealthy node %s", name, container.Engine.Name), http.StatusInternalServerError)
+		return
+	}
+
+	client, scheme, err := container.Engine.HTTPClientAndScheme()
+	if err != nil {
+		httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := client.Get(scheme + "://" + container.Engine.Addr + "/containers/" + container.ID + "/json")
+	container.Engine.CheckConnectionErr(err)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -386,7 +512,6 @@ func getContainerJSON(c *context, w http.ResponseWriter, r *http.Request) {
 
 	// cleanup
 	defer resp.Body.Close()
-	defer closeIdleConnections(client)
 
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -412,22 +537,53 @@ func getContainerJSON(c *context, w http.ResponseWriter, r *http.Request) {
 
 // POST /containers/create
 func postContainersCreate(c *context, w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var (
-		config = dockerclient.ContainerConfig{
-			HostConfig: dockerclient.HostConfig{
-				MemorySwappiness: -1,
+		defaultMemorySwappiness = int64(-1)
+		name                    = r.Form.Get("name")
+		config                  = cluster.ContainerConfig{
+			HostConfig: containertypes.HostConfig{
+				Resources: containertypes.Resources{
+					MemorySwappiness: &(defaultMemorySwappiness),
+				},
 			},
 		}
-		name = r.Form.Get("name")
 	)
 
-	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+	oldconfig := cluster.OldContainerConfig{
+		ContainerConfig: config,
+		Memory:          0,
+		MemorySwap:      0,
+		CPUShares:       0,
+		CPUSet:          "",
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&oldconfig); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	container, err := c.cluster.CreateContainer(cluster.BuildContainerConfig(config), name)
+	// make sure HostConfig fields are consolidated before creating container
+	cluster.ConsolidateResourceFields(&oldconfig)
+	config = oldconfig.ContainerConfig
+
+	// Pass auth information along if present
+	var authConfig *apitypes.AuthConfig
+	buf, err := base64.URLEncoding.DecodeString(r.Header.Get("X-Registry-Auth"))
+	if err == nil {
+		authConfig = &apitypes.AuthConfig{}
+		json.Unmarshal(buf, authConfig)
+	}
+	containerConfig := cluster.BuildContainerConfig(config.Config, config.HostConfig, config.NetworkingConfig)
+	if err := containerConfig.Validate(); err != nil {
+		httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	container, err := c.cluster.CreateContainer(containerConfig, name, authConfig)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "Conflict") {
 			httpError(w, err.Error(), http.StatusConflict)
@@ -439,7 +595,7 @@ func postContainersCreate(c *context, w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "{%q:%q}", "Id", container.Id)
+	fmt.Fprintf(w, "{%q:%q}", "Id", container.ID)
 	return
 }
 
@@ -467,7 +623,7 @@ func deleteContainers(c *context, w http.ResponseWriter, r *http.Request) {
 
 // POST /networks/create
 func postNetworksCreate(c *context, w http.ResponseWriter, r *http.Request) {
-	var request dockerclient.NetworkCreate
+	var request apitypes.NetworkCreateRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -478,19 +634,20 @@ func postNetworksCreate(c *context, w http.ResponseWriter, r *http.Request) {
 		request.Driver = "overlay"
 	}
 
-	response, err := c.cluster.CreateNetwork(&request)
+	response, err := c.cluster.CreateNetwork(request.Name, &request.NetworkCreate)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
 }
 
 // POST /volumes/create
 func postVolumesCreate(c *context, w http.ResponseWriter, r *http.Request) {
-	var request dockerclient.VolumeCreateRequest
+	var request apitypes.VolumeCreateRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -504,6 +661,7 @@ func postVolumesCreate(c *context, w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(volume)
 }
 
@@ -518,19 +676,13 @@ func postImagesCreate(c *context, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if image := r.Form.Get("fromImage"); image != "" { //pull
-		authConfig := dockerclient.AuthConfig{}
+		authConfig := apitypes.AuthConfig{}
 		buf, err := base64.URLEncoding.DecodeString(r.Header.Get("X-Registry-Auth"))
 		if err == nil {
 			json.Unmarshal(buf, &authConfig)
 		}
-
-		if tag := r.Form.Get("tag"); tag != "" {
-			if tagHasDigest(tag) {
-				image += "@" + tag
-			} else {
-				image += ":" + tag
-			}
-		}
+		tag := r.Form.Get("tag")
+		image := getImageRef(image, tag)
 
 		var errorMessage string
 		errorFound := false
@@ -569,7 +721,8 @@ func postImagesCreate(c *context, w http.ResponseWriter, r *http.Request) {
 			}
 			sendJSONMessage(wf, what, status)
 		}
-		c.cluster.Import(source, repo, tag, r.Body, callback)
+		ref := getImageRef(repo, tag)
+		c.cluster.Import(source, ref, tag, r.Body, callback)
 		if errorFound {
 			sendErrorJSONMessage(wf, 1, errorMessage)
 		}
@@ -580,7 +733,7 @@ func postImagesCreate(c *context, w http.ResponseWriter, r *http.Request) {
 // POST /images/load
 func postImagesLoad(c *context, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 
 	// call cluster to load image on every node
 	wf := NewWriteFlusher(w)
@@ -635,6 +788,42 @@ func getEvents(c *context, w http.ResponseWriter, r *http.Request) {
 	c.eventsHandler.Wait(r.RemoteAddr, until)
 }
 
+// POST /containers/{name:.*}/start
+func postContainersStart(c *context, w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	container := c.cluster.Container(name)
+	if container == nil {
+		httpError(w, fmt.Sprintf("No such container %s", name), http.StatusNotFound)
+		return
+	}
+
+	hostConfig := &dockerclient.HostConfig{
+		MemorySwappiness: -1,
+	}
+
+	buf, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	r.Body.Close()
+
+	if len(buf) <= 2 || (len(buf) == 4 && string(buf) == "null") {
+		hostConfig = nil
+	} else {
+		if err := json.Unmarshal(buf, hostConfig); err != nil {
+			httpError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := c.cluster.StartContainer(container, hostConfig); err != nil {
+		httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // POST /exec/{execid:.*}/start
 func postExecStart(c *context, w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Connection") == "" {
@@ -652,9 +841,14 @@ func postContainersExec(c *context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, scheme := newClientAndScheme(c.tlsConfig)
+	client, scheme, err := container.Engine.HTTPClientAndScheme()
+	if err != nil {
+		httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	resp, err := client.Post(scheme+"://"+container.Engine.Addr+"/containers/"+container.Id+"/exec", "application/json", r.Body)
+	resp, err := client.Post(scheme+"://"+container.Engine.Addr+"/containers/"+container.ID+"/exec", "application/json", r.Body)
+	container.Engine.CheckConnectionErr(err)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -662,7 +856,6 @@ func postContainersExec(c *context, w http.ResponseWriter, r *http.Request) {
 
 	// cleanup
 	defer resp.Body.Close()
-	defer closeIdleConnections(client)
 
 	// check status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -766,32 +959,8 @@ func ping(c *context, w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte{'O', 'K'})
 }
 
-// Proxy a request to the right node
-func proxyNetwork(c *context, w http.ResponseWriter, r *http.Request) {
-	var id = mux.Vars(r)["networkid"]
-	if network := c.cluster.Networks().Uniq().Get(id); network != nil {
-
-		// Set the network ID in the proxied URL path.
-		r.URL.Path = strings.Replace(r.URL.Path, id, network.ID, 1)
-
-		proxy(c.tlsConfig, network.Engine.Addr, w, r)
-		return
-	}
-	httpError(w, fmt.Sprintf("No such network: %s", id), http.StatusNotFound)
-}
-
-// Proxy a request to the right node
-func proxyVolume(c *context, w http.ResponseWriter, r *http.Request) {
-	var name = mux.Vars(r)["volumename"]
-	if volume := c.cluster.Volume(name); volume != nil {
-		proxy(c.tlsConfig, volume.Engine.Addr, w, r)
-		return
-	}
-	httpError(w, fmt.Sprintf("No such volume: %s", name), http.StatusNotFound)
-}
-
-// Proxy network to container operations, including connect/disconnect request
-func proxyNetworkContainerOperation(c *context, w http.ResponseWriter, r *http.Request) {
+// POST /networks/{networkid:.*}/disconnect
+func proxyNetworkDisconnect(c *context, w http.ResponseWriter, r *http.Request) {
 	var networkid = mux.Vars(r)["networkid"]
 	network := c.cluster.Networks().Uniq().Get(networkid)
 	if network == nil {
@@ -809,7 +978,63 @@ func proxyNetworkContainerOperation(c *context, w http.ResponseWriter, r *http.R
 	r.Body = ioutil.NopCloser(bytes.NewBuffer(buf))
 
 	// Extract container info from r.Body copy
-	var connect dockerclient.NetworkConnect
+	var disconnect apitypes.NetworkDisconnect
+	if err := json.NewDecoder(bodyCopy).Decode(&disconnect); err != nil {
+		httpError(w, fmt.Sprintf("Container is not specified"), http.StatusNotFound)
+		return
+	}
+
+	var engine *cluster.Engine
+
+	if disconnect.Force && network.Scope == "global" {
+		randomEngine, err := c.cluster.RANDOMENGINE()
+		if err != nil {
+			httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		engine = randomEngine
+	} else {
+		container := c.cluster.Container(disconnect.Container)
+		if container == nil {
+			httpError(w, fmt.Sprintf("No such container: %s", disconnect.Container), http.StatusNotFound)
+			return
+		}
+		engine = container.Engine
+	}
+
+	cb := func(resp *http.Response) {
+		// force fresh networks on this engine
+		engine.RefreshNetworks()
+	}
+
+	// request is forwarded to the container's address
+	err := proxyAsync(engine, w, r, cb)
+	engine.CheckConnectionErr(err)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusNotFound)
+	}
+}
+
+// POST /networks/{networkid:.*}/connect
+func proxyNetworkConnect(c *context, w http.ResponseWriter, r *http.Request) {
+	var networkid = mux.Vars(r)["networkid"]
+	network := c.cluster.Networks().Uniq().Get(networkid)
+	if network == nil {
+		httpError(w, fmt.Sprintf("No such network: %s", networkid), http.StatusNotFound)
+		return
+	}
+	// Set the network ID in the proxied URL path.
+	r.URL.Path = strings.Replace(r.URL.Path, networkid, network.ID, 1)
+
+	// make a copy of r.Body
+	buf, _ := ioutil.ReadAll(r.Body)
+	bodyCopy := ioutil.NopCloser(bytes.NewBuffer(buf))
+	defer bodyCopy.Close()
+	// restore r.Body stream as it'll be read again
+	r.Body = ioutil.NopCloser(bytes.NewBuffer(buf))
+
+	// Extract container info from r.Body copy
+	var connect apitypes.NetworkConnect
 	if err := json.NewDecoder(bodyCopy).Decode(&connect); err != nil {
 		httpError(w, fmt.Sprintf("Container is not specified"), http.StatusNotFound)
 		return
@@ -820,8 +1045,15 @@ func proxyNetworkContainerOperation(c *context, w http.ResponseWriter, r *http.R
 		return
 	}
 
+	cb := func(resp *http.Response) {
+		// force fresh networks on this engine
+		container.Engine.RefreshNetworks()
+	}
+
 	// request is forwarded to the container's address
-	if err := proxy(c.tlsConfig, container.Engine.Addr, w, r); err != nil {
+	err := proxyAsync(container.Engine, w, r, cb)
+	container.Engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusNotFound)
 	}
 }
@@ -830,16 +1062,22 @@ func proxyNetworkContainerOperation(c *context, w http.ResponseWriter, r *http.R
 func proxyContainer(c *context, w http.ResponseWriter, r *http.Request) {
 	name, container, err := getContainerFromVars(c, mux.Vars(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		if container == nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Set the full container ID in the proxied URL path.
 	if name != "" {
-		r.URL.Path = strings.Replace(r.URL.Path, name, container.Id, 1)
+		r.URL.Path = strings.Replace(r.URL.Path, name, container.ID, 1)
 	}
 
-	if err := proxy(c.tlsConfig, container.Engine.Addr, w, r); err != nil {
+	err = proxy(container.Engine, w, r)
+	container.Engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -848,13 +1086,17 @@ func proxyContainer(c *context, w http.ResponseWriter, r *http.Request) {
 func proxyContainerAndForceRefresh(c *context, w http.ResponseWriter, r *http.Request) {
 	name, container, err := getContainerFromVars(c, mux.Vars(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		if container == nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Set the full container ID in the proxied URL path.
 	if name != "" {
-		r.URL.Path = strings.Replace(r.URL.Path, name, container.Id, 1)
+		r.URL.Path = strings.Replace(r.URL.Path, name, container.ID, 1)
 	}
 
 	cb := func(resp *http.Response) {
@@ -862,7 +1104,9 @@ func proxyContainerAndForceRefresh(c *context, w http.ResponseWriter, r *http.Re
 		container.Refresh()
 	}
 
-	if err := proxyAsync(c.tlsConfig, container.Engine.Addr, w, r, cb); err != nil {
+	err = proxyAsync(container.Engine, w, r, cb)
+	container.Engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -872,7 +1116,8 @@ func proxyImage(c *context, w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 
 	if image := c.cluster.Image(name); image != nil {
-		proxy(c.tlsConfig, image.Engine.Addr, w, r)
+		err := proxy(image.Engine, w, r)
+		image.Engine.CheckConnectionErr(err)
 		return
 	}
 	httpError(w, fmt.Sprintf("No such image: %s", name), http.StatusNotFound)
@@ -885,7 +1130,8 @@ func proxyImageGet(c *context, w http.ResponseWriter, r *http.Request) {
 	for _, image := range c.cluster.Images() {
 		if len(strings.SplitN(name, ":", 2)) == 2 && image.Match(name, true) ||
 			len(strings.SplitN(name, ":", 2)) == 1 && image.Match(name, false) {
-			proxy(c.tlsConfig, image.Engine.Addr, w, r)
+			err := proxy(image.Engine, w, r)
+			image.Engine.CheckConnectionErr(err)
 			return
 		}
 	}
@@ -908,7 +1154,8 @@ func proxyImagePush(c *context, w http.ResponseWriter, r *http.Request) {
 	for _, image := range c.cluster.Images() {
 		if tag != "" && image.Match(name, true) ||
 			tag == "" && image.Match(name, false) {
-			proxy(c.tlsConfig, image.Engine.Addr, w, r)
+			err := proxy(image.Engine, w, r)
+			image.Engine.CheckConnectionErr(err)
 			return
 		}
 	}
@@ -929,14 +1176,18 @@ func postTagImage(c *context, w http.ResponseWriter, r *http.Request) {
 	tag := r.Form.Get("tag")
 	force := boolValue(r, "force")
 
+	ref := getImageRef(repo, tag)
 	// call cluster tag image
-	if err := c.cluster.TagImage(name, repo, tag, force); err != nil {
+	if err := c.cluster.TagImage(name, ref, force); err != nil {
 		if strings.HasPrefix(err.Error(), "No such image") {
 			httpError(w, err.Error(), http.StatusNotFound)
+			return
 		} else {
 			httpError(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 // Proxy a request to a random node
@@ -952,7 +1203,9 @@ func proxyRandom(c *context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := proxy(c.tlsConfig, engine.Addr, w, r); err != nil {
+	err = proxy(engine, w, r)
+	engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 
@@ -971,12 +1224,16 @@ func postCommit(c *context, w http.ResponseWriter, r *http.Request) {
 	// get container
 	name, container, err := getContainerFromVars(c, vars)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		if container == nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Set the full container ID in the proxied URL path.
 	if name != "" {
-		r.URL.RawQuery = strings.Replace(r.URL.RawQuery, name, container.Id, 1)
+		r.URL.RawQuery = strings.Replace(r.URL.RawQuery, name, container.ID, 1)
 	}
 
 	cb := func(resp *http.Response) {
@@ -986,7 +1243,9 @@ func postCommit(c *context, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// proxy commit request to the right node
-	if err := proxyAsync(c.tlsConfig, container.Engine.Addr, w, r, cb); err != nil {
+	err = proxyAsync(container.Engine, w, r, cb)
+	container.Engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -998,25 +1257,25 @@ func postBuild(c *context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buildImage := &dockerclient.BuildImage{
-		DockerfileName: r.Form.Get("dockerfile"),
-		RepoName:       r.Form.Get("t"),
-		RemoteURL:      r.Form.Get("remote"),
+	buildImage := &apitypes.ImageBuildOptions{
+		Dockerfile:     r.Form.Get("dockerfile"),
+		Tags:           r.Form["t"],
+		RemoteContext:  r.Form.Get("remote"),
 		NoCache:        boolValue(r, "nocache"),
-		Pull:           boolValue(r, "pull"),
+		PullParent:     boolValue(r, "pull"),
 		Remove:         boolValue(r, "rm"),
 		ForceRemove:    boolValue(r, "forcerm"),
 		SuppressOutput: boolValue(r, "q"),
+		Isolation:      containertypes.Isolation(r.Form.Get("isolation")),
 		Memory:         int64ValueOrZero(r, "memory"),
 		MemorySwap:     int64ValueOrZero(r, "memswap"),
-		CpuShares:      int64ValueOrZero(r, "cpushares"),
-		CpuPeriod:      int64ValueOrZero(r, "cpuperiod"),
-		CpuQuota:       int64ValueOrZero(r, "cpuquota"),
-		CpuSetCpus:     r.Form.Get("cpusetcpus"),
-		CpuSetMems:     r.Form.Get("cpusetmems"),
+		CPUShares:      int64ValueOrZero(r, "cpushares"),
+		CPUPeriod:      int64ValueOrZero(r, "cpuperiod"),
+		CPUQuota:       int64ValueOrZero(r, "cpuquota"),
+		CPUSetCPUs:     r.Form.Get("cpusetcpus"),
+		CPUSetMems:     r.Form.Get("cpusetmems"),
 		CgroupParent:   r.Form.Get("cgroupparent"),
-		Context:        r.Body,
-		BuildArgs:      make(map[string]string),
+		ShmSize:        int64ValueOrZero(r, "shmsize"),
 	}
 
 	buildArgsJSON := r.Form.Get("buildargs")
@@ -1024,18 +1283,28 @@ func postBuild(c *context, w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal([]byte(buildArgsJSON), &buildImage.BuildArgs)
 	}
 
-	authEncoded := r.Header.Get("X-Registry-Auth")
+	ulimitsJSON := r.Form.Get("ulimits")
+	if ulimitsJSON != "" {
+		json.Unmarshal([]byte(ulimitsJSON), &buildImage.Ulimits)
+	}
+
+	labelsJSON := r.Form.Get("labels")
+	if labelsJSON != "" {
+		json.Unmarshal([]byte(labelsJSON), &buildImage.Labels)
+	}
+
+	authEncoded := r.Header.Get("X-Registry-Config")
 	if authEncoded != "" {
-		buf, err := base64.URLEncoding.DecodeString(r.Header.Get("X-Registry-Auth"))
+		buf, err := base64.URLEncoding.DecodeString(r.Header.Get("X-Registry-Config"))
 		if err == nil {
-			json.Unmarshal(buf, &buildImage.Config)
+			json.Unmarshal(buf, &buildImage.AuthConfigs)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	wf := NewWriteFlusher(w)
 
-	err := c.cluster.BuildImage(buildImage, wf)
+	err := c.cluster.BuildImage(r.Body, buildImage, wf)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -1045,7 +1314,11 @@ func postBuild(c *context, w http.ResponseWriter, r *http.Request) {
 func postRenameContainer(c *context, w http.ResponseWriter, r *http.Request) {
 	_, container, err := getContainerFromVars(c, mux.Vars(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		if container == nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -1057,10 +1330,13 @@ func postRenameContainer(c *context, w http.ResponseWriter, r *http.Request) {
 	if err = c.cluster.RenameContainer(container, r.Form.Get("name")); err != nil {
 		if strings.HasPrefix(err.Error(), "Conflict") {
 			httpError(w, err.Error(), http.StatusConflict)
+			return
 		} else {
 			httpError(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
+	w.WriteHeader(http.StatusNoContent)
 
 }
 
@@ -1068,15 +1344,21 @@ func postRenameContainer(c *context, w http.ResponseWriter, r *http.Request) {
 func proxyHijack(c *context, w http.ResponseWriter, r *http.Request) {
 	name, container, err := getContainerFromVars(c, mux.Vars(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		if container == nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Set the full container ID in the proxied URL path.
 	if name != "" {
-		r.URL.Path = strings.Replace(r.URL.Path, name, container.Id, 1)
+		r.URL.Path = strings.Replace(r.URL.Path, name, container.ID, 1)
 	}
 
-	if err := hijack(c.tlsConfig, container.Engine.Addr, w, r); err != nil {
+	err = hijack(c.tlsConfig, container.Engine.Addr, w, r)
+	container.Engine.CheckConnectionErr(err)
+	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 }

@@ -36,7 +36,7 @@ func (n weightedNodeList) Less(i, j int) bool {
 	return ip.Weight < jp.Weight
 }
 
-func weighNodes(config *cluster.ContainerConfig, nodes []*node.Node) (weightedNodeList, error) {
+func weighNodes(config *cluster.ContainerConfig, nodes []*node.Node, healthinessFactor int64) (weightedNodeList, error) {
 	weightedNodes := weightedNodeList{}
 
 	for _, node := range nodes {
@@ -44,7 +44,7 @@ func weighNodes(config *cluster.ContainerConfig, nodes []*node.Node) (weightedNo
 		nodeCpus := node.TotalCpus
 
 		// Skip nodes that are smaller than the requested resources.
-		if nodeMemory < int64(config.Memory) || nodeCpus < config.CpuShares {
+		if nodeMemory < int64(config.HostConfig.Memory) || nodeCpus < config.HostConfig.CPUShares {
 			continue
 		}
 
@@ -53,15 +53,15 @@ func weighNodes(config *cluster.ContainerConfig, nodes []*node.Node) (weightedNo
 			memoryScore int64 = 100
 		)
 
-		if config.CpuShares > 0 {
-			cpuScore = (node.UsedCpus + config.CpuShares) * 100 / nodeCpus
+		if config.HostConfig.CPUShares > 0 {
+			cpuScore = (node.UsedCpus + config.HostConfig.CPUShares) * 100 / nodeCpus
 		}
-		if config.Memory > 0 {
-			memoryScore = (node.UsedMemory + config.Memory) * 100 / nodeMemory
+		if config.HostConfig.Memory > 0 {
+			memoryScore = (node.UsedMemory + config.HostConfig.Memory) * 100 / nodeMemory
 		}
 
 		if cpuScore <= 100 && memoryScore <= 100 {
-			weightedNodes = append(weightedNodes, &weightedNode{Node: node, Weight: cpuScore + memoryScore})
+			weightedNodes = append(weightedNodes, &weightedNode{Node: node, Weight: cpuScore + memoryScore + healthinessFactor*node.HealthIndicator})
 		}
 	}
 

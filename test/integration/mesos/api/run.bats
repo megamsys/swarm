@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 
+load ../../helpers
 load ../mesos_helpers
 
 function teardown() {
@@ -64,15 +65,18 @@ function teardown() {
 	[[ "${output}" == *'resources constraints (-c and/or -m) are required by mesos'* ]]
 }
 
-@test "mesos - docker run big" {
-	start_docker_with_busybox 3
+@test "mesos - docker run with long pull" {
+	start_docker 2
 	start_mesos
-	swarm_manage --cluster-driver mesos-experimental 127.0.0.1:$MESOS_MASTER_PORT
+	swarm_manage --cluster-driver mesos-experimental --cluster-opt mesos.tasktimeout=1s 127.0.0.1:$MESOS_MASTER_PORT
 
-	for i in `seq 1 100`; do
-	    docker_swarm run -d -m 20m busybox echo $i
-	done
+	# make sure no container exist
+	run docker_swarm ps -qa
+	[ "${#lines[@]}" -eq 0 ]
 
-	run docker_swarm ps -aq
-	[ "${#lines[@]}" -eq  100 ]
+	# run
+	docker_swarm run -m 20m -d --name test_container busybox sleep 100
+
+	# verify, container is running
+	[ -n $(docker_swarm ps -q --filter=name=test_container --filter=status=running) ]
 }

@@ -8,6 +8,44 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSpreadPlaceDifferentNodeSize(t *testing.T) {
+	s := &SpreadPlacementStrategy{}
+
+	nodes := []*node.Node{
+		createNode(fmt.Sprintf("node-0"), 64, 21),
+		createNode(fmt.Sprintf("node-1"), 128, 42),
+	}
+
+	// add 60 containers
+	for i := 0; i < 60; i++ {
+		config := createConfig(0, 0)
+		node := selectTopNode(t, s, config, nodes)
+		assert.NoError(t, node.AddContainer(createContainer(fmt.Sprintf("c%d", i), config)))
+	}
+
+	assert.Equal(t, len(nodes[0].Containers), 30)
+	assert.Equal(t, len(nodes[1].Containers), 30)
+}
+
+func TestSpreadPlaceDifferentNodeSizeCPUs(t *testing.T) {
+	s := &SpreadPlacementStrategy{}
+
+	nodes := []*node.Node{
+		createNode(fmt.Sprintf("node-0"), 64, 21),
+		createNode(fmt.Sprintf("node-1"), 128, 42),
+	}
+
+	// add 60 containers 1CPU
+	for i := 0; i < 60; i++ {
+		config := createConfig(0, 1)
+		node := selectTopNode(t, s, config, nodes)
+		assert.NoError(t, node.AddContainer(createContainer(fmt.Sprintf("c%d", i), config)))
+	}
+
+	assert.Equal(t, len(nodes[0].Containers), 20)
+	assert.Equal(t, len(nodes[1].Containers), 40)
+}
+
 func TestSpreadPlaceEqualWeight(t *testing.T) {
 	s := &SpreadPlacementStrategy{}
 
@@ -126,22 +164,22 @@ func TestSpreadPlaceContainerOvercommit(t *testing.T) {
 	config := createConfig(0, 0)
 
 	// Below limit should still work.
-	config.Memory = 90 * 1024 * 1024 * 1024
+	config.HostConfig.Memory = 90 * 1024 * 1024 * 1024
 	node := selectTopNode(t, s, config, nodes)
 	assert.Equal(t, node, nodes[0])
 
 	// At memory limit should still work.
-	config.Memory = 100 * 1024 * 1024 * 1024
+	config.HostConfig.Memory = 100 * 1024 * 1024 * 1024
 	node = selectTopNode(t, s, config, nodes)
 	assert.Equal(t, node, nodes[0])
 
 	// Up to 105% it should still work.
-	config.Memory = 105 * 1024 * 1024 * 1024
+	config.HostConfig.Memory = 105 * 1024 * 1024 * 1024
 	node = selectTopNode(t, s, config, nodes)
 	assert.Equal(t, node, nodes[0])
 
 	// Above it should return an error.
-	config.Memory = 106 * 1024 * 1024 * 1024
+	config.HostConfig.Memory = 106 * 1024 * 1024 * 1024
 	_, err := s.RankAndSort(config, nodes)
 	assert.Error(t, err)
 }

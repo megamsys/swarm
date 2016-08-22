@@ -11,15 +11,15 @@ import (
 func testFixturesAllHealthyNode() []*node.Node {
 	return []*node.Node{
 		{
-			ID:        "node-0-id",
-			Name:      "node-0-name",
-			IsHealthy: true,
+			ID:              "node-0-id",
+			Name:            "node-0-name",
+			HealthIndicator: 100,
 		},
 
 		{
-			ID:        "node-1-id",
-			Name:      "node-1-name",
-			IsHealthy: true,
+			ID:              "node-1-id",
+			Name:            "node-1-name",
+			HealthIndicator: 100,
 		},
 	}
 }
@@ -27,15 +27,15 @@ func testFixturesAllHealthyNode() []*node.Node {
 func testFixturesPartHealthyNode() []*node.Node {
 	return []*node.Node{
 		{
-			ID:        "node-0-id",
-			Name:      "node-0-name",
-			IsHealthy: false,
+			ID:              "node-0-id",
+			Name:            "node-0-name",
+			HealthIndicator: 0,
 		},
 
 		{
-			ID:        "node-1-id",
-			Name:      "node-1-name",
-			IsHealthy: true,
+			ID:              "node-1-id",
+			Name:            "node-1-name",
+			HealthIndicator: 100,
 		},
 	}
 }
@@ -43,15 +43,15 @@ func testFixturesPartHealthyNode() []*node.Node {
 func testFixturesNoHealthyNode() []*node.Node {
 	return []*node.Node{
 		{
-			ID:        "node-0-id",
-			Name:      "node-0-name",
-			IsHealthy: false,
+			ID:              "node-0-id",
+			Name:            "node-0-name",
+			HealthIndicator: 0,
 		},
 
 		{
-			ID:        "node-1-id",
-			Name:      "node-1-name",
-			IsHealthy: false,
+			ID:              "node-1-id",
+			Name:            "node-1-name",
+			HealthIndicator: 0,
 		},
 	}
 }
@@ -66,16 +66,16 @@ func TestHealthyFilter(t *testing.T) {
 		err             error
 	)
 
-	result, err = f.Filter(&cluster.ContainerConfig{}, nodesAllHealth)
+	result, err = f.Filter(&cluster.ContainerConfig{}, nodesAllHealth, true)
 	assert.NoError(t, err)
 	assert.Equal(t, result, nodesAllHealth)
 
-	result, err = f.Filter(&cluster.ContainerConfig{}, nodesPartHealth)
+	result, err = f.Filter(&cluster.ContainerConfig{}, nodesPartHealth, true)
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, result[0], nodesPartHealth[1])
 
-	result, err = f.Filter(&cluster.ContainerConfig{}, nodesNoHealth)
+	result, err = f.Filter(&cluster.ContainerConfig{}, nodesNoHealth, true)
 	assert.Equal(t, err, ErrNoHealthyNodeAvailable)
 	assert.Nil(t, result)
 }

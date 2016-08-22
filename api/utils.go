@@ -54,20 +54,18 @@ func sendErrorJSONMessage(w io.Writer, errorCode int, errorMessage string) {
 
 	json.NewEncoder(w).Encode(message)
 }
-func newClientAndScheme(tlsConfig *tls.Config) (*http.Client, string) {
-	if tlsConfig != nil {
-		return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, "https"
-	}
-	return &http.Client{}, "http"
-}
 
 func getContainerFromVars(c *context, vars map[string]string) (string, *cluster.Container, error) {
 	if name, ok := vars["name"]; ok {
 		if container := c.cluster.Container(name); container != nil {
+			if !container.Engine.IsHealthy() {
+				return name, container, fmt.Errorf("Container %s running on unhealthy node %s", name, container.Engine.Name)
+			}
 			return name, container, nil
 		}
 		return name, nil, fmt.Errorf("No such container: %s", name)
 	}
+
 	if ID, ok := vars["execid"]; ok {
 		for _, container := range c.cluster.Containers() {
 			for _, execID := range container.Info.ExecIDs {
@@ -78,6 +76,7 @@ func getContainerFromVars(c *context, vars map[string]string) (string, *cluster.
 		}
 		return "", nil, fmt.Errorf("Exec %s not found", ID)
 	}
+
 	return "", nil, errors.New("Not found")
 }
 
@@ -90,21 +89,18 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-// prevents leak with https
-func closeIdleConnections(client *http.Client) {
-	if tr, ok := client.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
-}
-
-func proxyAsync(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *http.Request, callback func(*http.Response)) error {
-	// Use a new client for each request
-	client, scheme := newClientAndScheme(tlsConfig)
+func proxyAsync(engine *cluster.Engine, w http.ResponseWriter, r *http.Request, callback func(*http.Response)) error {
 	// RequestURI may not be sent to client
 	r.RequestURI = ""
 
+	client, scheme, err := engine.HTTPClientAndScheme()
+
+	if err != nil {
+		return err
+	}
+
 	r.URL.Scheme = scheme
-	r.URL.Host = addr
+	r.URL.Host = engine.Addr
 
 	log.WithFields(log.Fields{"method": r.Method, "url": r.URL}).Debug("Proxy request")
 	resp, err := client.Do(r)
@@ -122,13 +118,12 @@ func proxyAsync(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *ht
 
 	// cleanup
 	resp.Body.Close()
-	closeIdleConnections(client)
 
 	return nil
 }
 
-func proxy(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *http.Request) error {
-	return proxyAsync(tlsConfig, addr, w, r, nil)
+func proxy(engine *cluster.Engine, w http.ResponseWriter, r *http.Request) error {
+	return proxyAsync(engine, w, r, nil)
 }
 
 type tlsClientConn struct {
@@ -249,14 +244,17 @@ func hijack(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *http.R
 	if err != nil {
 		return err
 	}
+
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		return err
+		return errors.New("Docker server does not support hijacking")
 	}
+
 	nc, _, err := hj.Hijack()
 	if err != nil {
 		return err
 	}
+
 	defer nc.Close()
 	defer d.Close()
 
@@ -285,7 +283,7 @@ func hijack(tlsConfig *tls.Config, addr string, w http.ResponseWriter, r *http.R
 	// On 2, stdin copy should return immediately now since the out stream is closed.
 	// Note that we probably don't actually even need to wait here.
 	//
-	// If we don't close the stream when stdout is done, in some cases stdin will hange
+	// If we don't close the stream when stdout is done, in some cases stdin will hang
 	select {
 	case <-inDone:
 		// wait for out to be done
@@ -321,4 +319,18 @@ func int64ValueOrZero(r *http.Request, k string) int64 {
 
 func tagHasDigest(tag string) bool {
 	return strings.Contains(tag, ":")
+}
+
+// TODO(nishanttotla): There might be a better way to pass a ref string than construct it here
+// getImageRef returns a string containing the registry reference given a repo and tag
+func getImageRef(repo, tag string) string {
+	ref := repo
+	if tag != "" {
+		if tagHasDigest(tag) {
+			ref += "@" + tag
+		} else {
+			ref += ":" + tag
+		}
+	}
+	return ref
 }

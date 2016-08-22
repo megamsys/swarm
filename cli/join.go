@@ -1,17 +1,24 @@
 package cli
 
 import (
-	"regexp"
+	"math/rand"
+	"net"
+	"strconv"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/codegangsta/cli"
-	"github.com/docker/swarm/discovery"
+	"github.com/docker/docker/pkg/discovery"
 )
 
 func checkAddrFormat(addr string) bool {
-	m, _ := regexp.MatchString("^[0-9a-zA-Z._-]+:[0-9]{1,5}$", addr)
-	return m
+	// validate addr is in host:port form. Use net function to handle both IPv4/IPv6 cases.
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	portNum, err := strconv.Atoi(port)
+	return err == nil && portNum > 0 && portNum <= 65535
 }
 
 func join(c *cli.Context) {
@@ -26,6 +33,14 @@ func join(c *cli.Context) {
 	}
 	if !checkAddrFormat(addr) {
 		log.Fatal("--advertise should be of the form ip:port or hostname:port")
+	}
+
+	joinDelay, err := time.ParseDuration(c.String("delay"))
+	if err != nil {
+		log.Fatalf("invalid --delay: %v", err)
+	}
+	if joinDelay < time.Duration(0)*time.Second {
+		log.Fatalf("--delay should not be a negative number")
 	}
 
 	hb, err := time.ParseDuration(c.String("heartbeat"))
@@ -46,6 +61,16 @@ func join(c *cli.Context) {
 	d, err := discovery.New(dflag, hb, ttl, getDiscoveryOpt(c))
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// if joinDelay is 0, no delay will be executed
+	// if joinDelay is larger than 0,
+	// add a random delay between 0s and joinDelay at start to avoid synchronized registration
+	if joinDelay > 0 {
+		r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+		delay := time.Duration(r.Int63n(int64(joinDelay)))
+		log.Infof("Add a random delay %s to avoid synchronized registration", delay)
+		time.Sleep(delay)
 	}
 
 	for {
